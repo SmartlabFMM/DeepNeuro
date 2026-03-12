@@ -2,12 +2,48 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                                QFrame, QSizePolicy, QMessageBox, QDialog, QFormLayout,
                                QLineEdit, QComboBox, QSpinBox, QScrollArea, QPlainTextEdit,
-                               QDateEdit, QCompleter)
-from PySide6.QtCore import Qt, QDate
+                               QCompleter)
+from PySide6.QtCore import Qt, QThread, Signal, QStringListModel
 from PySide6.QtGui import QFont
 from api_client import api_client
 from datetime import datetime
 import random
+
+
+class SendCaseDataLoader(QThread):
+    """Load send-case autocomplete data without blocking the UI thread."""
+    loaded = Signal(object, object, str)
+
+    def __init__(self, doctor_email):
+        super().__init__()
+        self.doctor_email = doctor_email
+
+    def run(self):
+        try:
+            warning_parts = []
+
+            previous_cases_response, _ = api_client.get_previous_cases(self.doctor_email)
+            if previous_cases_response.get('success'):
+                previous_cases = previous_cases_response.get('cases', [])
+                cases_dict = {case['case_id']: case for case in previous_cases}
+            else:
+                cases_dict = {}
+                warning_parts.append("case history")
+
+            radiologists_response, _ = api_client.get_all_radiologists()
+            if radiologists_response.get('success'):
+                radiologists = radiologists_response.get('radiologists', [])
+            else:
+                radiologists = []
+                warning_parts.append("radiologists")
+
+            warning_message = ""
+            if warning_parts:
+                warning_message = f"Unable to load {', '.join(warning_parts)} right now."
+
+            self.loaded.emit(cases_dict, radiologists, warning_message)
+        except Exception:
+            self.loaded.emit({}, [], "Unable to load suggestions right now.")
 
 
 class DoctorView:
@@ -20,6 +56,8 @@ class DoctorView:
         self.requests_list_widget = None
         self.requests_list_layout = None
         self.all_radiologists = []
+        self.cases_dict = {}
+        self.send_case_loader = None
         
     def create_buttons_container(self):
         """Create container with diagnosis buttons for doctors"""
@@ -794,7 +832,7 @@ class DoctorView:
                 font-weight: 600;
                 min-width: 120px;
             }
-            QLineEdit, QComboBox, QDateEdit, QSpinBox, QPlainTextEdit {
+            QLineEdit, QComboBox, QSpinBox, QPlainTextEdit {
                 background: white;
                 border: 1px solid #cbd5e1;
                 border-radius: 8px;
@@ -802,10 +840,10 @@ class DoctorView:
                 color: #111827;
                 selection-background-color: #fde68a;
             }
-            QLineEdit:hover, QComboBox:hover, QDateEdit:hover, QSpinBox:hover, QPlainTextEdit:hover {
+            QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QPlainTextEdit:hover {
                 border: 1px solid #94a3b8;
             }
-            QLineEdit:focus, QComboBox:focus, QDateEdit:focus, QSpinBox:focus, QPlainTextEdit:focus {
+            QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QPlainTextEdit:focus {
                 border: 1px solid #f59e0b;
                 background: #fffbeb;
             }
@@ -818,7 +856,7 @@ class DoctorView:
                 border-top-right-radius: 8px;
                 border-bottom-right-radius: 8px;
             }
-            QComboBox::down-arrow, QDateEdit::down-arrow {
+            QComboBox::down-arrow {
                 image: none;
                 width: 0px;
                 height: 0px;
@@ -884,17 +922,14 @@ class DoctorView:
         form.setSpacing(10)
         form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
-        # Load previous cases for autocomplete
-        response, status_code = api_client.get_previous_cases(self.user_email)
-        previous_cases = response.get('cases', []) if response.get('success') else []
-        self.cases_dict = {case['case_id']: case for case in previous_cases}
-        
+        self.cases_dict = {}
+
         case_id = QLineEdit()
         case_id.setPlaceholderText("Type to search previous cases or enter new case ID")
-        
-        # Add autocomplete for case IDs
-        case_id_list = [case['case_id'] for case in previous_cases]
-        case_id_completer = QCompleter(case_id_list)
+
+        # Add autocomplete for case IDs (loaded in background)
+        case_id_model = QStringListModel([])
+        case_id_completer = QCompleter(case_id_model)
         case_id_completer.setCaseSensitivity(Qt.CaseInsensitive)
         case_id_completer.setFilterMode(Qt.MatchContains)
         case_id.setCompleter(case_id_completer)
@@ -936,25 +971,16 @@ class DoctorView:
             "Ischemic Stroke"
         ])
 
-        scan_date = QDateEdit()
-        scan_date.setCalendarPopup(True)
-        scan_date.setDate(QDate.currentDate())
-
         priority = QComboBox()
         priority.addItems(["Routine", "Urgent"])
 
         # Radiologist field with autocomplete
         radiologist_email = QLineEdit()
         radiologist_email.setPlaceholderText("Search radiologist by name or email...")
-        
-        # Load radiologists from database
-        response, status_code = api_client.get_all_radiologists()
-        radiologists = response.get('radiologists', []) if response.get('success') else []
-        self.all_radiologists = radiologists
-        
-        # Create autocomplete list
-        radiologist_list = [f"{rad['name']} ({rad['email']})" for rad in radiologists]
-        completer = QCompleter(radiologist_list)
+
+        # Create autocomplete list (loaded in background)
+        radiologist_model = QStringListModel([])
+        completer = QCompleter(radiologist_model)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
         completer.setFilterMode(Qt.MatchContains)
         radiologist_email.setCompleter(completer)
@@ -975,8 +1001,6 @@ class DoctorView:
         gender_label.setObjectName("FieldLabel")
         diagnosis_label = QLabel("Diagnosis Type")
         diagnosis_label.setObjectName("FieldLabel")
-        scan_date_label = QLabel("Scan Date")
-        scan_date_label.setObjectName("FieldLabel")
         priority_label = QLabel("Priority")
         priority_label.setObjectName("FieldLabel")
         radiologist_label = QLabel("Radiologist")
@@ -990,7 +1014,6 @@ class DoctorView:
         form.addRow(age_label, patient_age)
         form.addRow(gender_label, patient_gender)
         form.addRow(diagnosis_label, diagnosis_type)
-        form.addRow(scan_date_label, scan_date)
         form.addRow(priority_label, priority)
         form.addRow(radiologist_label, radiologist_email)
         form.addRow(description_label, description)
@@ -1048,6 +1071,8 @@ class DoctorView:
             radiologist_text = radiologist_email.text().strip()
             if '(' in radiologist_text and ')' in radiologist_text:
                 radiologist_email_value = radiologist_text[radiologist_text.rfind('(')+1:radiologist_text.rfind(')')].strip()
+            elif '@' in radiologist_text and '.' in radiologist_text:
+                radiologist_email_value = radiologist_text
             else:
                 self.parent.show_message_box("Missing Information", "Please select a valid radiologist.", "warning")
                 return
@@ -1062,7 +1087,7 @@ class DoctorView:
                 patient_age=patient_age.value(),
                 patient_gender=patient_gender.currentText(),
                 diagnosis_type=diagnosis_type.currentText(),
-                scan_date=scan_date.date().toString("yyyy-MM-dd"),
+                scan_date=datetime.now().strftime("%Y-%m-%d"),
                 priority=priority.currentText(),
                 radiologist_email=radiologist_email_value,
                 description=description.toPlainText().strip()
@@ -1099,5 +1124,20 @@ class DoctorView:
         dialog_layout = QVBoxLayout(dialog)
         dialog_layout.setContentsMargins(0, 0, 0, 0)
         dialog_layout.addWidget(container)
+
+        # Load autocomplete data after dialog is created so the form appears instantly.
+        def on_loader_finished(cases_dict, radiologists, warning_message):
+            self.cases_dict = cases_dict
+            self.all_radiologists = radiologists
+
+            case_id_model.setStringList(list(cases_dict.keys()))
+            radiologist_model.setStringList([
+                f"{rad['name']} ({rad['email']})" for rad in radiologists
+            ])
+
+
+        self.send_case_loader = SendCaseDataLoader(self.user_email)
+        self.send_case_loader.loaded.connect(on_loader_finished)
+        self.send_case_loader.start()
 
         dialog.exec()
