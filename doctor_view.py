@@ -28,15 +28,13 @@ class DoctorView:
         layout.setSpacing(16)
         layout.setContentsMargins(0, 10, 0, 0)
         
-        # Doctor sees all diagnosis options
-        self.btn_glioma = self.parent.create_diagnosis_button("Glioma Tumor", "#6366f1")
-        self.btn_hemorrhagic = self.parent.create_diagnosis_button("Hemorrhagic Stroke", "#ef4444")
-        self.btn_ischemic = self.parent.create_diagnosis_button("Ischemic Stroke", "#10b981")
+        # Doctor main actions
+        self.btn_visualize = self.parent.create_diagnosis_button("Visualize Medical Records", "#6366f1")
+        self.btn_add_patient = self.parent.create_diagnosis_button("Add Patient", "#10b981")
         self.btn_send_case = self.parent.create_diagnosis_button("Send to Radiologist", "#f59e0b")
         
-        layout.addWidget(self.btn_glioma)
-        layout.addWidget(self.btn_hemorrhagic)
-        layout.addWidget(self.btn_ischemic)
+        layout.addWidget(self.btn_visualize)
+        layout.addWidget(self.btn_add_patient)
         layout.addWidget(self.btn_send_case)
         
         return container
@@ -517,48 +515,79 @@ class DoctorView:
         """Open the send case dialog for doctors"""
         dialog = QDialog(self.parent)
         dialog.setWindowTitle("Send Case to Radiologist")
-        dialog.setMinimumWidth(520)
+        dialog.setMinimumWidth(620)
         dialog.setStyleSheet("""
             QDialog {
-                background: #f3f4f6;
+                background: #f8fafc;
             }
             QLabel {
                 color: #374151;
             }
+            QLabel#DialogSubtitle {
+                color: #6b7280;
+            }
+            QLabel#FieldLabel {
+                color: #334155;
+                font-weight: 600;
+                min-width: 120px;
+            }
             QLineEdit, QComboBox, QDateEdit, QSpinBox, QPlainTextEdit {
                 background: white;
-                border: 1px solid #e5e7eb;
-                border-radius: 6px;
-                padding: 6px 8px;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                padding: 8px 10px;
                 color: #111827;
+                selection-background-color: #fde68a;
+            }
+            QLineEdit:hover, QComboBox:hover, QDateEdit:hover, QSpinBox:hover, QPlainTextEdit:hover {
+                border: 1px solid #94a3b8;
             }
             QLineEdit:focus, QComboBox:focus, QDateEdit:focus, QSpinBox:focus, QPlainTextEdit:focus {
                 border: 1px solid #f59e0b;
+                background: #fffbeb;
             }
             QComboBox::drop-down {
-                border-left: 1px solid #e5e7eb;
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 28px;
+                border-left: 1px solid #e2e8f0;
+                background: #f8fafc;
+                border-top-right-radius: 8px;
+                border-bottom-right-radius: 8px;
             }
-            QComboBox::down-arrow, QDateEdit::down-arrow, QSpinBox::up-arrow, QSpinBox::down-arrow {
-                width: 8px;
-                height: 8px;
+            QComboBox::down-arrow, QDateEdit::down-arrow {
+                image: none;
+                width: 0px;
+                height: 0px;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid #64748b;
+                margin-right: 8px;
             }
             QSpinBox::up-button, QSpinBox::down-button {
-                width: 16px;
+                width: 18px;
                 border: none;
+                background: #f8fafc;
+            }
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+                background: #e2e8f0;
             }
             QComboBox QAbstractItemView {
                 background: white;
                 color: #111827;
-                selection-background-color: #fef3c7;
-                selection-color: #111827;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                selection-background-color: #fffbeb;
+                selection-color: #1f2937;
+                padding: 4px;
             }
             QListView {
                 background: white;
                 color: #111827;
-                selection-background-color: #fef3c7;
-                selection-color: #111827;
-                border: 1px solid #e5e7eb;
-                border-radius: 4px;
+                selection-background-color: #fffbeb;
+                selection-color: #1f2937;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
             }
         """)
 
@@ -572,6 +601,7 @@ class DoctorView:
         title.setStyleSheet("color: #1f2937;")
 
         subtitle = QLabel("Fill in the case details and select the radiologist")
+        subtitle.setObjectName("DialogSubtitle")
         subtitle.setFont(QFont("Segoe UI", 9))
         subtitle.setStyleSheet("color: #6b7280;")
 
@@ -670,16 +700,37 @@ class DoctorView:
         description.setPlaceholderText("Add clinical notes, symptoms, or special instructions")
         description.setMinimumHeight(90)
 
-        form.addRow("Case ID", case_id)
-        form.addRow("Patient Name", patient_name)
-        form.addRow("Patient ID", patient_id)
-        form.addRow("Age", patient_age)
-        form.addRow("Gender", patient_gender)
-        form.addRow("Diagnosis Type", diagnosis_type)
-        form.addRow("Scan Date", scan_date)
-        form.addRow("Priority", priority)
-        form.addRow("Radiologist", radiologist_email)
-        form.addRow("Description", description)
+        case_id_label = QLabel("Case ID")
+        case_id_label.setObjectName("FieldLabel")
+        patient_name_label = QLabel("Patient Name")
+        patient_name_label.setObjectName("FieldLabel")
+        patient_id_label = QLabel("Patient ID")
+        patient_id_label.setObjectName("FieldLabel")
+        age_label = QLabel("Age")
+        age_label.setObjectName("FieldLabel")
+        gender_label = QLabel("Gender")
+        gender_label.setObjectName("FieldLabel")
+        diagnosis_label = QLabel("Diagnosis Type")
+        diagnosis_label.setObjectName("FieldLabel")
+        scan_date_label = QLabel("Scan Date")
+        scan_date_label.setObjectName("FieldLabel")
+        priority_label = QLabel("Priority")
+        priority_label.setObjectName("FieldLabel")
+        radiologist_label = QLabel("Radiologist")
+        radiologist_label.setObjectName("FieldLabel")
+        description_label = QLabel("Description")
+        description_label.setObjectName("FieldLabel")
+
+        form.addRow(case_id_label, case_id)
+        form.addRow(patient_name_label, patient_name)
+        form.addRow(patient_id_label, patient_id)
+        form.addRow(age_label, patient_age)
+        form.addRow(gender_label, patient_gender)
+        form.addRow(diagnosis_label, diagnosis_type)
+        form.addRow(scan_date_label, scan_date)
+        form.addRow(priority_label, priority)
+        form.addRow(radiologist_label, radiologist_email)
+        form.addRow(description_label, description)
 
         actions = QHBoxLayout()
         actions.addStretch()

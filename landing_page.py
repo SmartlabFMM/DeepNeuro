@@ -1,6 +1,7 @@
 ﻿from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QLabel, QPushButton, QFrame, QStackedWidget,
-                               QSizePolicy, QMessageBox)
+                               QSizePolicy, QMessageBox, QDialog, QFormLayout,
+                               QComboBox)
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from api_client import api_client
@@ -171,7 +172,7 @@ class LandingPage(QMainWindow):
         title.setFont(QFont("Segoe UI", 12, QFont.Bold))
         title.setStyleSheet("color: #2d3748;")
 
-        subtitle = QLabel("Click 'Glioma Tumor' to open the 3D viewer here")
+        subtitle = QLabel("Click 'Visualize Medical Records' to open the viewer")
         subtitle.setFont(QFont("Segoe UI", 9))
         subtitle.setStyleSheet("color: #718096;")
 
@@ -635,8 +636,14 @@ class LandingPage(QMainWindow):
 
     def handle_diagnosis_click(self, diagnosis_type):
         """Handle diagnosis button click"""
-        if diagnosis_type == "Glioma Tumor":
-            self.show_segmentation_viewer()
+        if diagnosis_type == "Visualize Medical Records":
+            self.open_visualization_selector()
+        elif diagnosis_type == "Add Patient":
+            self.show_message_box(
+                "Add Patient",
+                "Add patient workflow is coming soon.",
+                "information"
+            )
         elif diagnosis_type == "Send to Radiologist":
             self.view.open_send_case_form()
         elif diagnosis_type == "Upload Test":
@@ -665,6 +672,184 @@ class LandingPage(QMainWindow):
             msg_box.setStyleSheet(self.get_dialog_style())
             msg_box.setStandardButtons(QMessageBox.Ok)
             msg_box.exec()
+
+    def open_visualization_selector(self):
+        """Collect disease type and visualization mode before opening viewer."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Visualize Medical Records")
+        dialog.setMinimumWidth(480)
+        dialog.setStyleSheet("""
+            QDialog {
+                background: #f8fafc;
+            }
+            QLabel {
+                color: #1f2937;
+            }
+            QLabel#DialogSubtitle {
+                color: #6b7280;
+            }
+            QFrame#OptionsCard {
+                background: white;
+                border: 1px solid #e2e8f0;
+                border-radius: 10px;
+            }
+            QLabel#FieldLabel {
+                color: #374151;
+                font-weight: 600;
+                min-width: 120px;
+            }
+            QComboBox {
+                background: white;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                padding: 8px 34px 8px 10px;
+                color: #111827;
+                min-height: 24px;
+                font-weight: 600;
+            }
+            QComboBox:hover {
+                border: 1px solid #94a3b8;
+            }
+            QComboBox:focus {
+                border: 1px solid #6366f1;
+                background: #eef2ff;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 28px;
+                border-left: 1px solid #e2e8f0;
+                background: #f8fafc;
+                border-top-right-radius: 8px;
+                border-bottom-right-radius: 8px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                width: 0px;
+                height: 0px;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid #64748b;
+                margin-right: 8px;
+            }
+            QComboBox QAbstractItemView {
+                background: white;
+                color: #111827;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                selection-background-color: #e0e7ff;
+                selection-color: #1e293b;
+                padding: 4px;
+            }
+            QPushButton {
+                border-radius: 6px;
+                padding: 8px 14px;
+            }
+        """)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title = QLabel("Select visualization options")
+        title.setFont(QFont("Segoe UI", 12, QFont.Bold))
+
+        subtitle = QLabel("Choose disease type and view mode")
+        subtitle.setObjectName("DialogSubtitle")
+        subtitle.setFont(QFont("Segoe UI", 9))
+
+        options_card = QFrame()
+        options_card.setObjectName("OptionsCard")
+        card_layout = QVBoxLayout(options_card)
+        card_layout.setContentsMargins(14, 12, 14, 12)
+        card_layout.setSpacing(10)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+        disease_combo = QComboBox()
+        disease_combo.setObjectName("DiseaseCombo")
+        disease_combo.addItems([
+            "Glioma Tumor",
+            "Hemorrhagic Stroke",
+            "Ischemic Stroke"
+        ])
+
+        mode_combo = QComboBox()
+        mode_combo.setObjectName("ModeCombo")
+        mode_combo.addItems(["2D", "3D"])
+
+        disease_label = QLabel("Disease Type")
+        disease_label.setObjectName("FieldLabel")
+        mode_label = QLabel("Visualization")
+        mode_label.setObjectName("FieldLabel")
+
+        form.addRow(disease_label, disease_combo)
+        form.addRow(mode_label, mode_combo)
+        card_layout.addLayout(form)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setCursor(Qt.PointingHandCursor)
+        cancel_btn.setStyleSheet("""
+            QPushButton {
+                background: #e5e7eb;
+                color: #111827;
+                border: none;
+            }
+            QPushButton:hover {
+                background: #d1d5db;
+            }
+        """)
+        cancel_btn.clicked.connect(dialog.reject)
+
+        open_btn = QPushButton("Open")
+        open_btn.setCursor(Qt.PointingHandCursor)
+        open_btn.setStyleSheet("""
+            QPushButton {
+                background: #6366f1;
+                color: white;
+                border: none;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #818cf8;
+            }
+        """)
+
+        def handle_open():
+            selected_disease = disease_combo.currentText()
+            selected_mode = mode_combo.currentText()
+            dialog.accept()
+            self.launch_visualization(selected_disease, selected_mode)
+
+        open_btn.clicked.connect(handle_open)
+
+        buttons.addWidget(cancel_btn)
+        buttons.addWidget(open_btn)
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addWidget(options_card)
+        layout.addLayout(buttons)
+
+        dialog.exec()
+
+    def launch_visualization(self, disease_type, mode):
+        """Route visualization request to supported/placeholder flows."""
+        if disease_type == "Glioma Tumor" and mode == "3D":
+            self.show_segmentation_viewer()
+            return
+
+        self.show_message_box(
+            "Coming Soon",
+            f"{mode} visualization for {disease_type} is not available yet.\n\n"
+            "Currently available: Glioma Tumor (3D).",
+            "information"
+        )
 
     def show_segmentation_viewer(self):
         if hasattr(self, "seg_viewer") and self.seg_viewer is not None:
