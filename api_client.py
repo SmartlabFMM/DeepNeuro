@@ -119,6 +119,26 @@ class APIClient:
     def get_previous_cases(self, doctor_email):
         """Get previous cases for a doctor"""
         return self._make_request('GET', f'/api/diagnosis/previous-cases/{doctor_email}')
+
+    def add_patient(self, doctor_email, patient_name, patient_age, patient_sex,
+                    patient_id, patient_email, phone_number, has_conditions, conditions_notes):
+        """Add a patient profile for a doctor"""
+        data = {
+            'doctor_email': doctor_email,
+            'patient_name': patient_name,
+            'patient_age': patient_age,
+            'patient_sex': patient_sex,
+            'patient_id': patient_id,
+            'patient_email': patient_email,
+            'phone_number': phone_number,
+            'has_conditions': has_conditions,
+            'conditions_notes': conditions_notes
+        }
+        return self._make_request('POST', '/api/diagnosis/patients/add', json=data)
+
+    def get_doctor_patients(self, doctor_email):
+        """Get all patients for a doctor"""
+        return self._make_request('GET', f'/api/diagnosis/patients/doctor/{doctor_email}')
     
     def mark_read_doctor(self, request_id):
         """Mark request as read by doctor"""

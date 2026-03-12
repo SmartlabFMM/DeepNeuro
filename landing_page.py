@@ -639,11 +639,7 @@ class LandingPage(QMainWindow):
         if diagnosis_type == "Visualize Medical Records":
             self.open_visualization_selector()
         elif diagnosis_type == "Add Patient":
-            self.show_message_box(
-                "Add Patient",
-                "Add patient workflow is coming soon.",
-                "information"
-            )
+            self.view.open_add_patient_form()
         elif diagnosis_type == "Send to Radiologist":
             self.view.open_send_case_form()
         elif diagnosis_type == "Upload Test":

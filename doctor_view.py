@@ -511,6 +511,269 @@ class DoctorView:
         # Refresh inbox after dialog closes to update card styling
         self.refresh_inbox()
 
+    def open_add_patient_form(self):
+        """Open the add patient dialog for doctors"""
+        dialog = QDialog(self.parent)
+        dialog.setWindowTitle("Add Patient")
+        dialog.setMinimumWidth(620)
+        dialog.setStyleSheet("""
+            QDialog {
+                background: #f8fafc;
+            }
+            QLabel {
+                color: #374151;
+            }
+            QLabel#DialogSubtitle {
+                color: #6b7280;
+            }
+            QLabel#FieldLabel {
+                color: #334155;
+                font-weight: 600;
+                min-width: 120px;
+            }
+            QLineEdit, QComboBox, QSpinBox, QPlainTextEdit {
+                background: white;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                padding: 8px 10px;
+                color: #111827;
+                selection-background-color: #86efac;
+            }
+            QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QPlainTextEdit:hover {
+                border: 1px solid #94a3b8;
+            }
+            QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QPlainTextEdit:focus {
+                border: 1px solid #10b981;
+                background: #f0fdf4;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 28px;
+                border-left: 1px solid #e2e8f0;
+                background: #f8fafc;
+                border-top-right-radius: 8px;
+                border-bottom-right-radius: 8px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                width: 0px;
+                height: 0px;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid #64748b;
+                margin-right: 8px;
+            }
+            QSpinBox::up-button, QSpinBox::down-button {
+                width: 18px;
+                border: none;
+                background: #f8fafc;
+            }
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+                background: #e2e8f0;
+            }
+            QComboBox QAbstractItemView {
+                background: white;
+                color: #111827;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                selection-background-color: #f0fdf4;
+                selection-color: #1f2937;
+                padding: 4px;
+            }
+        """)
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setSpacing(12)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        title = QLabel("Add New Patient")
+        title.setFont(QFont("Segoe UI", 13, QFont.Bold))
+        title.setStyleSheet("color: #1f2937;")
+
+        subtitle = QLabel("Enter patient information to save the profile")
+        subtitle.setObjectName("DialogSubtitle")
+        subtitle.setFont(QFont("Segoe UI", 9))
+        subtitle.setStyleSheet("color: #6b7280;")
+
+        form_card = QFrame()
+        form_card.setStyleSheet("""
+            QFrame {
+                background: white;
+                border: 1px solid #e5e7eb;
+                border-radius: 10px;
+            }
+        """)
+        form_card_layout = QVBoxLayout(form_card)
+        form_card_layout.setContentsMargins(14, 12, 14, 12)
+        form_card_layout.setSpacing(10)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+        patient_name = QLineEdit()
+        patient_name.setPlaceholderText("Full name")
+
+        patient_age = QSpinBox()
+        patient_age.setRange(0, 120)
+        patient_age.setSpecialValueText("")
+        patient_age.setValue(0)
+
+        patient_sex = QComboBox()
+        patient_sex.addItems(["Female", "Male", "Other"])
+
+        patient_id = QLineEdit()
+        patient_id.setPlaceholderText("Hospital or national ID")
+
+        patient_email = QLineEdit()
+        patient_email.setPlaceholderText("Patient email")
+
+        phone_number = QLineEdit()
+        phone_number.setPlaceholderText("Phone number")
+
+        has_conditions = QComboBox()
+        has_conditions.addItems(["No", "Yes"])
+
+        conditions_notes = QPlainTextEdit()
+        conditions_notes.setPlaceholderText("If yes, add chronic conditions, medications, allergies, etc.")
+        conditions_notes.setMinimumHeight(90)
+
+        def on_conditions_change(text):
+            conditions_notes.setEnabled(text == "Yes")
+            if text != "Yes":
+                conditions_notes.clear()
+
+        has_conditions.currentTextChanged.connect(on_conditions_change)
+        on_conditions_change(has_conditions.currentText())
+
+        patient_name_label = QLabel("Patient Name")
+        patient_name_label.setObjectName("FieldLabel")
+        age_label = QLabel("Age")
+        age_label.setObjectName("FieldLabel")
+        sex_label = QLabel("Sex")
+        sex_label.setObjectName("FieldLabel")
+        patient_id_label = QLabel("Patient ID")
+        patient_id_label.setObjectName("FieldLabel")
+        email_label = QLabel("Email")
+        email_label.setObjectName("FieldLabel")
+        phone_label = QLabel("Phone Number")
+        phone_label.setObjectName("FieldLabel")
+        has_conditions_label = QLabel("Has Conditions")
+        has_conditions_label.setObjectName("FieldLabel")
+        conditions_label = QLabel("Condition Details")
+        conditions_label.setObjectName("FieldLabel")
+
+        form.addRow(patient_name_label, patient_name)
+        form.addRow(age_label, patient_age)
+        form.addRow(sex_label, patient_sex)
+        form.addRow(patient_id_label, patient_id)
+        form.addRow(email_label, patient_email)
+        form.addRow(phone_label, phone_number)
+        form.addRow(has_conditions_label, has_conditions)
+        form.addRow(conditions_label, conditions_notes)
+
+        actions = QHBoxLayout()
+        actions.addStretch()
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setCursor(Qt.PointingHandCursor)
+        cancel_btn.setStyleSheet("""
+            QPushButton {
+                background: #e5e7eb;
+                color: #111827;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background: #d1d5db;
+            }
+        """)
+        cancel_btn.clicked.connect(dialog.reject)
+
+        add_btn = QPushButton("Add Patient")
+        add_btn.setCursor(Qt.PointingHandCursor)
+        add_btn.setStyleSheet("""
+            QPushButton {
+                background: #10b981;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #34d399;
+            }
+        """)
+
+        def handle_submit():
+            if not patient_name.text().strip():
+                self.parent.show_message_box("Missing Information", "Patient name is required.", "warning")
+                return
+            if patient_age.value() <= 0:
+                self.parent.show_message_box("Missing Information", "Please enter a valid age.", "warning")
+                return
+            if not patient_id.text().strip():
+                self.parent.show_message_box("Missing Information", "Patient ID is required.", "warning")
+                return
+            if not patient_email.text().strip():
+                self.parent.show_message_box("Missing Information", "Patient email is required.", "warning")
+                return
+            if not phone_number.text().strip():
+                self.parent.show_message_box("Missing Information", "Phone number is required.", "warning")
+                return
+
+            if has_conditions.currentText() == "Yes" and not conditions_notes.toPlainText().strip():
+                self.parent.show_message_box("Missing Information", "Please add condition details.", "warning")
+                return
+
+            response, status_code = api_client.add_patient(
+                doctor_email=self.user_email,
+                patient_name=patient_name.text().strip(),
+                patient_age=patient_age.value(),
+                patient_sex=patient_sex.currentText(),
+                patient_id=patient_id.text().strip(),
+                patient_email=patient_email.text().strip(),
+                phone_number=phone_number.text().strip(),
+                has_conditions=(has_conditions.currentText() == "Yes"),
+                conditions_notes=conditions_notes.toPlainText().strip()
+            )
+
+            if response.get('success'):
+                dialog.accept()
+                self.parent.show_message_box(
+                    "Patient Added",
+                    "Patient information has been saved successfully.",
+                    "information"
+                )
+            else:
+                self.parent.show_message_box(
+                    "Error",
+                    response.get('message', 'Failed to add patient. Please try again.'),
+                    "critical"
+                )
+
+        add_btn.clicked.connect(handle_submit)
+
+        actions.addWidget(cancel_btn)
+        actions.addWidget(add_btn)
+
+        form_card_layout.addLayout(form)
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addWidget(form_card)
+        layout.addLayout(actions)
+
+        dialog_layout = QVBoxLayout(dialog)
+        dialog_layout.setContentsMargins(0, 0, 0, 0)
+        dialog_layout.addWidget(container)
+
+        dialog.exec()
+
     def open_send_case_form(self):
         """Open the send case dialog for doctors"""
         dialog = QDialog(self.parent)
