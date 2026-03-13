@@ -84,12 +84,11 @@ class APIClient:
         return self._make_request('POST', '/api/auth/reset-password', json=data)
     
     # Diagnosis endpoints
-    def submit_diagnosis_request(self, case_id, doctor_email, doctor_name, patient_name,
+    def submit_diagnosis_request(self, doctor_email, doctor_name, patient_name,
                                 patient_id, patient_age, patient_gender, diagnosis_type,
                                 scan_date, priority, radiologist_email, description):
         """Submit a diagnosis request"""
         data = {
-            'case_id': case_id,
             'doctor_email': doctor_email,
             'doctor_name': doctor_name,
             'patient_name': patient_name,

@@ -4,10 +4,9 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushB
                                QLineEdit, QComboBox, QSpinBox, QScrollArea, QPlainTextEdit,
                                QCompleter)
 from PySide6.QtCore import Qt, QThread, Signal, QStringListModel
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QIntValidator
 from api_client import api_client
 from datetime import datetime
-import random
 
 
 class SendCaseDataLoader(QThread):
@@ -25,7 +24,7 @@ class SendCaseDataLoader(QThread):
             previous_cases_response, _ = api_client.get_previous_cases(self.doctor_email)
             if previous_cases_response.get('success'):
                 previous_cases = previous_cases_response.get('cases', [])
-                cases_dict = {case['case_id']: case for case in previous_cases}
+                cases_dict = {case['patient_id']: case for case in previous_cases}
             else:
                 cases_dict = {}
                 warning_parts.append("case history")
@@ -171,21 +170,21 @@ class DoctorView:
             empty_label.setAlignment(Qt.AlignCenter)
             self.requests_list_layout.addWidget(empty_label)
         else:
-            # Group requests by case_id
+            # Group requests by patient_id
             from collections import defaultdict
             grouped_requests = defaultdict(list)
             for request in requests:
-                grouped_requests[request['case_id']].append(request)
+                grouped_requests[request['patient_id']].append(request)
             
             # Display each group
-            for case_id, case_requests in grouped_requests.items():
-                group_card = self.create_grouped_request_card(case_id, case_requests)
+            for patient_id, case_requests in grouped_requests.items():
+                group_card = self.create_grouped_request_card(patient_id, case_requests)
                 self.requests_list_layout.addWidget(group_card)
         
         self.requests_list_layout.addStretch()
     
-    def create_grouped_request_card(self, case_id, requests):
-        """Create a grouped card for multiple requests with the same case ID"""
+    def create_grouped_request_card(self, patient_id, requests):
+        """Create a grouped card for multiple requests with the same patient ID"""
         container = QWidget()
         container_layout = QVBoxLayout(container)
         container_layout.setContentsMargins(0, 0, 0, 0)
@@ -195,7 +194,7 @@ class DoctorView:
         unread_count = sum(1 for r in requests if not r.get('is_read', 0))
         is_any_unread = unread_count > 0
         
-        # Header card with case ID and count
+        # Header card with patient ID and count
         header_card = QFrame()
         if is_any_unread:
             header_card.setStyleSheet("""
@@ -228,8 +227,8 @@ class DoctorView:
         header_layout.setContentsMargins(12, 10, 12, 10)
         header_layout.setSpacing(16)
         
-        # Case ID
-        case_label = QLabel(f"🗂️ {case_id}")
+        # Patient ID
+        case_label = QLabel(f"🆔 {patient_id}")
         case_font = QFont("Segoe UI", 11, QFont.Bold)
         case_label.setFont(case_font)
         case_label.setStyleSheet("color: #111827;")
@@ -335,8 +334,8 @@ class DoctorView:
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(16)
         
-        # Case ID
-        case_label = QLabel(f"🗂️ {request['case_id']}")
+        # Patient ID
+        case_label = QLabel(f"🆔 {request['patient_id']}")
         case_font = QFont("Segoe UI", 11, QFont.Bold)
         case_label.setFont(case_font)
         case_label.setStyleSheet("color: #111827;")
@@ -419,7 +418,7 @@ class DoctorView:
             api_client.mark_read_doctor(request['id'])
         
         dialog = QDialog(self.parent)
-        dialog.setWindowTitle(f"Case Details - {request['case_id']}")
+        dialog.setWindowTitle(f"Request Details - {request['patient_id']}")
         dialog.setMinimumWidth(600)
         dialog.setMinimumHeight(500)
         dialog.setStyleSheet("""
@@ -435,8 +434,8 @@ class DoctorView:
         layout.setSpacing(12)
         layout.setContentsMargins(20, 20, 20, 20)
         
-        # Title with case ID
-        title = QLabel(f"Case: {request['case_id']}")
+        # Title with patient ID
+        title = QLabel(f"Patient ID: {request['patient_id']}")
         title_font = QFont("Segoe UI", 14, QFont.Bold)
         title.setFont(title_font)
         title.setStyleSheet("color: #1f2937;")
@@ -463,7 +462,7 @@ class DoctorView:
                 (f"Gender", request.get('patient_gender', 'N/A')),
             ]),
             ("Case Information", [
-                (f"Case ID", request['case_id']),
+                (f"Patient ID", request['patient_id']),
                 (f"Sent To", request.get('radiologist_email', 'N/A')),
                 (f"Priority", request['priority']),
                 (f"Status", request['status']),
@@ -654,13 +653,13 @@ class DoctorView:
         patient_name = QLineEdit()
         patient_name.setPlaceholderText("Full name")
 
-        patient_age = QSpinBox()
-        patient_age.setRange(0, 120)
-        patient_age.setSpecialValueText("")
-        patient_age.setValue(0)
+        patient_age = QLineEdit()
+        patient_age.setPlaceholderText("Age")
+        patient_age.setValidator(QIntValidator(1, 120, self.parent))
 
         patient_sex = QComboBox()
-        patient_sex.addItems(["Female", "Male", "Other"])
+        patient_sex.addItems(["Female", "Male"])
+        patient_sex.setCurrentIndex(-1)
 
         patient_id = QLineEdit()
         patient_id.setPlaceholderText("Hospital or national ID")
@@ -673,6 +672,7 @@ class DoctorView:
 
         has_conditions = QComboBox()
         has_conditions.addItems(["No", "Yes"])
+        has_conditions.setCurrentIndex(-1)
 
         conditions_notes = QPlainTextEdit()
         conditions_notes.setPlaceholderText("If yes, add chronic conditions, medications, allergies, etc.")
@@ -751,8 +751,12 @@ class DoctorView:
             if not patient_name.text().strip():
                 self.parent.show_message_box("Missing Information", "Patient name is required.", "warning")
                 return
-            if patient_age.value() <= 0:
-                self.parent.show_message_box("Missing Information", "Please enter a valid age.", "warning")
+            if not patient_age.text().strip().isdigit():
+                self.parent.show_message_box("Missing Information", "Age must be a number.", "warning")
+                return
+            age_value = int(patient_age.text().strip())
+            if age_value < 1 or age_value > 120:
+                self.parent.show_message_box("Missing Information", "Age must be between 1 and 120.", "warning")
                 return
             if not patient_id.text().strip():
                 self.parent.show_message_box("Missing Information", "Patient ID is required.", "warning")
@@ -771,7 +775,7 @@ class DoctorView:
             response, status_code = api_client.add_patient(
                 doctor_email=self.user_email,
                 patient_name=patient_name.text().strip(),
-                patient_age=patient_age.value(),
+                patient_age=age_value,
                 patient_sex=patient_sex.currentText(),
                 patient_id=patient_id.text().strip(),
                 patient_email=patient_email.text().strip(),
@@ -924,37 +928,32 @@ class DoctorView:
 
         self.cases_dict = {}
 
-        case_id = QLineEdit()
-        case_id.setPlaceholderText("Type to search previous cases or enter new case ID")
+        patient_id = QLineEdit()
+        patient_id.setPlaceholderText("Type to search previous patients or enter patient ID")
 
-        # Add autocomplete for case IDs (loaded in background)
-        case_id_model = QStringListModel([])
-        case_id_completer = QCompleter(case_id_model)
-        case_id_completer.setCaseSensitivity(Qt.CaseInsensitive)
-        case_id_completer.setFilterMode(Qt.MatchContains)
-        case_id.setCompleter(case_id_completer)
+        # Add autocomplete for patient IDs (loaded in background)
+        patient_id_model = QStringListModel([])
+        patient_id_completer = QCompleter(patient_id_model)
+        patient_id_completer.setCaseSensitivity(Qt.CaseInsensitive)
+        patient_id_completer.setFilterMode(Qt.MatchContains)
+        patient_id.setCompleter(patient_id_completer)
 
         patient_name = QLineEdit()
         patient_name.setPlaceholderText("Full name")
 
-        patient_id = QLineEdit()
-        patient_id.setPlaceholderText("Hospital or national ID")
-
-        patient_age = QSpinBox()
-        patient_age.setRange(0, 120)
-        patient_age.setSpecialValueText("")
-        patient_age.setValue(0)
+        patient_age = QLineEdit()
+        patient_age.setPlaceholderText("Age")
+        patient_age.setValidator(QIntValidator(1, 120, self.parent))
 
         patient_gender = QComboBox()
-        patient_gender.addItems(["Female", "Male", "Other"])
+        patient_gender.addItems(["Female", "Male"])
         
         # Auto-fill patient fields when case ID is selected
-        def on_case_id_selected(selected_case_id):
-            if selected_case_id in self.cases_dict:
-                case_data = self.cases_dict[selected_case_id]
+        def on_patient_id_selected(selected_patient_id):
+            if selected_patient_id in self.cases_dict:
+                case_data = self.cases_dict[selected_patient_id]
                 patient_name.setText(case_data['patient_name'])
-                patient_id.setText(case_data['patient_id'])
-                patient_age.setValue(case_data['patient_age'] if case_data['patient_age'] else 0)
+                patient_age.setText(str(case_data['patient_age']) if case_data['patient_age'] else "")
                 
                 # Set gender
                 gender_index = patient_gender.findText(case_data['patient_gender'])
@@ -962,7 +961,7 @@ class DoctorView:
                     patient_gender.setCurrentIndex(gender_index)
         
         # Trigger auto-fill when user selects from completer dropdown
-        case_id_completer.activated.connect(on_case_id_selected)
+        patient_id_completer.activated.connect(on_patient_id_selected)
 
         diagnosis_type = QComboBox()
         diagnosis_type.addItems([
@@ -970,31 +969,34 @@ class DoctorView:
             "Hemorrhagic Stroke",
             "Ischemic Stroke"
         ])
+        diagnosis_type.setCurrentIndex(-1)
 
         priority = QComboBox()
         priority.addItems(["Routine", "Urgent"])
+        priority.setCurrentIndex(-1)
 
-        # Radiologist field with autocomplete
-        radiologist_email = QLineEdit()
-        radiologist_email.setPlaceholderText("Search radiologist by name or email...")
+        # Radiologist field with searchable combo box
+        radiologist_combo = QComboBox()
+        radiologist_combo.setEditable(True)
+        radiologist_combo.setInsertPolicy(QComboBox.NoInsert)
+        radiologist_combo.lineEdit().setPlaceholderText("Search radiologist by name or email...")
+        radiologist_combo.setCurrentIndex(-1)
 
         # Create autocomplete list (loaded in background)
         radiologist_model = QStringListModel([])
         completer = QCompleter(radiologist_model)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
         completer.setFilterMode(Qt.MatchContains)
-        radiologist_email.setCompleter(completer)
+        radiologist_combo.setCompleter(completer)
 
         description = QPlainTextEdit()
         description.setPlaceholderText("Add clinical notes, symptoms, or special instructions")
         description.setMinimumHeight(90)
 
-        case_id_label = QLabel("Case ID")
-        case_id_label.setObjectName("FieldLabel")
-        patient_name_label = QLabel("Patient Name")
-        patient_name_label.setObjectName("FieldLabel")
         patient_id_label = QLabel("Patient ID")
         patient_id_label.setObjectName("FieldLabel")
+        patient_name_label = QLabel("Patient Name")
+        patient_name_label.setObjectName("FieldLabel")
         age_label = QLabel("Age")
         age_label.setObjectName("FieldLabel")
         gender_label = QLabel("Gender")
@@ -1008,14 +1010,13 @@ class DoctorView:
         description_label = QLabel("Description")
         description_label.setObjectName("FieldLabel")
 
-        form.addRow(case_id_label, case_id)
-        form.addRow(patient_name_label, patient_name)
         form.addRow(patient_id_label, patient_id)
+        form.addRow(patient_name_label, patient_name)
         form.addRow(age_label, patient_age)
         form.addRow(gender_label, patient_gender)
         form.addRow(diagnosis_label, diagnosis_type)
         form.addRow(priority_label, priority)
-        form.addRow(radiologist_label, radiologist_email)
+        form.addRow(radiologist_label, radiologist_combo)
         form.addRow(description_label, description)
 
         actions = QHBoxLayout()
@@ -1060,7 +1061,14 @@ class DoctorView:
             if not patient_id.text().strip():
                 self.parent.show_message_box("Missing Information", "Patient ID is required.", "warning")
                 return
-            if not radiologist_email.text().strip():
+            if not patient_age.text().strip().isdigit():
+                self.parent.show_message_box("Missing Information", "Age must be a number.", "warning")
+                return
+            age_value = int(patient_age.text().strip())
+            if age_value < 1 or age_value > 120:
+                self.parent.show_message_box("Missing Information", "Age must be between 1 and 120.", "warning")
+                return
+            if not radiologist_combo.currentText().strip():
                 self.parent.show_message_box("Missing Information", "Radiologist field is required.", "warning")
                 return
             if not description.toPlainText().strip():
@@ -1068,7 +1076,7 @@ class DoctorView:
                 return
             
             # Extract email from radiologist field (format: "Name (email)")
-            radiologist_text = radiologist_email.text().strip()
+            radiologist_text = radiologist_combo.currentText().strip()
             if '(' in radiologist_text and ')' in radiologist_text:
                 radiologist_email_value = radiologist_text[radiologist_text.rfind('(')+1:radiologist_text.rfind(')')].strip()
             elif '@' in radiologist_text and '.' in radiologist_text:
@@ -1079,12 +1087,11 @@ class DoctorView:
             
             # Submit via API
             response, status_code = api_client.submit_diagnosis_request(
-                case_id=case_id.text().strip() or f"{datetime.now().strftime('%Y')}{random.randint(1000, 9999)}",
                 doctor_email=self.user_email,
                 doctor_name=self.user_name,
                 patient_name=patient_name.text().strip(),
                 patient_id=patient_id.text().strip(),
-                patient_age=patient_age.value(),
+                patient_age=age_value,
                 patient_gender=patient_gender.currentText(),
                 diagnosis_type=diagnosis_type.currentText(),
                 scan_date=datetime.now().strftime("%Y-%m-%d"),
@@ -1130,10 +1137,18 @@ class DoctorView:
             self.cases_dict = cases_dict
             self.all_radiologists = radiologists
 
-            case_id_model.setStringList(list(cases_dict.keys()))
-            radiologist_model.setStringList([
-                f"{rad['name']} ({rad['email']})" for rad in radiologists
-            ])
+            patient_id_model.setStringList(list(cases_dict.keys()))
+            radiologist_options = [f"{rad['name']} ({rad['email']})" for rad in radiologists]
+            radiologist_model.setStringList(radiologist_options)
+
+            # Populate combo dropdown so users can scroll/select entries.
+            current_text = radiologist_combo.currentText()
+            radiologist_combo.clear()
+            radiologist_combo.addItems(radiologist_options)
+            if current_text:
+                radiologist_combo.setEditText(current_text)
+            else:
+                radiologist_combo.setCurrentIndex(-1)
 
 
         self.send_case_loader = SendCaseDataLoader(self.user_email)

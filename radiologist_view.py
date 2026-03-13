@@ -130,21 +130,21 @@ class RadiologistView:
             empty_label.setAlignment(Qt.AlignCenter)
             self.radiologist_requests_layout.addWidget(empty_label)
         else:
-            # Group requests by case_id
+            # Group requests by patient_id
             from collections import defaultdict
             grouped_requests = defaultdict(list)
             for request in requests:
-                grouped_requests[request['case_id']].append(request)
+                grouped_requests[request['patient_id']].append(request)
             
             # Display each group
-            for case_id, case_requests in grouped_requests.items():
-                group_card = self.create_grouped_radiologist_request_card(case_id, case_requests)
+            for patient_id, case_requests in grouped_requests.items():
+                group_card = self.create_grouped_radiologist_request_card(patient_id, case_requests)
                 self.radiologist_requests_layout.addWidget(group_card)
         
         self.radiologist_requests_layout.addStretch()
     
-    def create_grouped_radiologist_request_card(self, case_id, requests):
-        """Create a grouped card for multiple requests with the same case ID"""
+    def create_grouped_radiologist_request_card(self, patient_id, requests):
+        """Create a grouped card for multiple requests with the same patient ID"""
         container = QWidget()
         container_layout = QVBoxLayout(container)
         container_layout.setContentsMargins(0, 0, 0, 0)
@@ -154,7 +154,7 @@ class RadiologistView:
         unread_count = sum(1 for r in requests if not r.get('is_read', 0))
         is_any_unread = unread_count > 0
         
-        # Header card with case ID and count
+        # Header card with patient ID and count
         header_card = QFrame()
         if is_any_unread:
             header_card.setStyleSheet("""
@@ -187,8 +187,8 @@ class RadiologistView:
         header_layout.setContentsMargins(12, 10, 12, 10)
         header_layout.setSpacing(16)
         
-        # Case ID
-        case_label = QLabel(f"🗂️ {case_id}")
+        # Patient ID
+        case_label = QLabel(f"🆔 {patient_id}")
         case_font = QFont("Segoe UI", 11, QFont.Bold)
         case_label.setFont(case_font)
         case_label.setStyleSheet("color: #111827;")
@@ -294,8 +294,8 @@ class RadiologistView:
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(16)
         
-        # Case ID
-        case_label = QLabel(f"🗂️ {request['case_id']}")
+        # Patient ID
+        case_label = QLabel(f"🆔 {request['patient_id']}")
         case_font = QFont("Segoe UI", 11, QFont.Bold)
         case_label.setFont(case_font)
         case_label.setStyleSheet("color: #111827;")
@@ -378,7 +378,7 @@ class RadiologistView:
             api_client.mark_read_radiologist(request['id'])
         
         dialog = QDialog(self.parent)
-        dialog.setWindowTitle(f"Case Details - {request['case_id']}")
+        dialog.setWindowTitle(f"Request Details - {request['patient_id']}")
         dialog.setMinimumWidth(600)
         dialog.setMinimumHeight(500)
         dialog.setStyleSheet("""
@@ -394,8 +394,8 @@ class RadiologistView:
         layout.setSpacing(12)
         layout.setContentsMargins(20, 20, 20, 20)
         
-        # Title with case ID
-        title = QLabel(f"Case: {request['case_id']}")
+        # Title with patient ID
+        title = QLabel(f"Patient ID: {request['patient_id']}")
         title_font = QFont("Segoe UI", 14, QFont.Bold)
         title.setFont(title_font)
         title.setStyleSheet("color: #1f2937;")
@@ -420,7 +420,7 @@ class RadiologistView:
                 (f"Diagnosis Type", request.get('diagnosis_type', 'N/A')),
             ]),
             ("Case Information", [
-                (f"Case ID", request['case_id']),
+                (f"Patient ID", request['patient_id']),
                 (f"From Doctor", request.get('doctor_name', 'N/A')),
                 (f"Priority", request['priority']),
                 (f"Status", request['status']),
