@@ -1,7 +1,7 @@
 """Radiologist-specific landing page view"""
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                                QFrame, QSizePolicy, QMessageBox, QDialog,
-                               QScrollArea, QPlainTextEdit)
+                               QScrollArea, QPlainTextEdit, QLineEdit)
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from api_client import api_client
@@ -17,6 +17,8 @@ class RadiologistView:
         self.user_name = parent.user_name
         self.radiologist_requests_widget = None
         self.radiologist_requests_layout = None
+        self.requests_search_input = None
+        self.all_received_requests = []
         
     def create_buttons_container(self):
         """Create container with diagnosis buttons for radiologists"""
@@ -62,6 +64,24 @@ class RadiologistView:
         subtitle = QLabel("Cases sent to you by doctors")
         subtitle.setFont(QFont("Segoe UI", 9))
         subtitle.setStyleSheet("color: #6b7280;")
+
+        self.requests_search_input = QLineEdit()
+        self.requests_search_input.setPlaceholderText("Search by patient ID or patient name")
+        self.requests_search_input.setClearButtonEnabled(True)
+        self.requests_search_input.setFixedWidth(280)
+        self.requests_search_input.setStyleSheet("""
+            QLineEdit {
+                background: white;
+                border: 1px solid #d1d5db;
+                border-radius: 6px;
+                padding: 6px 10px;
+                color: #111827;
+            }
+            QLineEdit:focus {
+                border: 1px solid #6366f1;
+            }
+        """)
+        self.requests_search_input.textChanged.connect(self.apply_radiologist_filter)
         
         refresh_btn = QPushButton("🔄 Refresh")
         refresh_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
@@ -83,6 +103,7 @@ class RadiologistView:
         header_layout.addWidget(title)
         header_layout.addWidget(subtitle)
         header_layout.addStretch()
+        header_layout.addWidget(self.requests_search_input)
         header_layout.addWidget(refresh_btn)
         
         layout.addLayout(header_layout)
@@ -111,20 +132,35 @@ class RadiologistView:
         return frame
     
     def refresh_radiologist_requests(self):
-        """Refresh the radiologist requests view with latest requests"""
+        """Fetch latest requests from API, then apply local filter."""
+        response, status_code = api_client.get_radiologist_requests(self.user_email)
+        self.all_received_requests = response.get('requests', []) if response.get('success') else []
+        self.apply_radiologist_filter()
+
+    def apply_radiologist_filter(self):
+        """Filter cached received requests by patient ID or patient name."""
         # Clear existing items
         while self.radiologist_requests_layout.count():
             child = self.radiologist_requests_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
-        
-        # Get requests from API
-        response, status_code = api_client.get_radiologist_requests(self.user_email)
-        requests = response.get('requests', []) if response.get('success') else []
+
+        requests = list(self.all_received_requests)
+
+        search_query = ""
+        if self.requests_search_input is not None:
+            search_query = self.requests_search_input.text().strip().lower()
+
+        if search_query:
+            requests = [
+                request for request in requests
+                if self._matches_request_search(request, search_query)
+            ]
         
         if not requests:
             # Show empty state
-            empty_label = QLabel("No requests received yet.")
+            empty_text = "No matching requests found." if self.all_received_requests else "No requests received yet."
+            empty_label = QLabel(empty_text)
             empty_label.setFont(QFont("Segoe UI", 9))
             empty_label.setStyleSheet("color: #9ca3af; padding: 20px;")
             empty_label.setAlignment(Qt.AlignCenter)
@@ -142,6 +178,12 @@ class RadiologistView:
                 self.radiologist_requests_layout.addWidget(group_card)
         
         self.radiologist_requests_layout.addStretch()
+
+    def _matches_request_search(self, request, search_query):
+        """Return True when query matches patient ID or patient name."""
+        patient_id = str(request.get('patient_id', '')).lower()
+        patient_name = str(request.get('patient_name', '')).lower()
+        return search_query in patient_id or search_query in patient_name
     
     def create_grouped_radiologist_request_card(self, patient_id, requests):
         """Create a grouped card for multiple requests with the same patient ID"""

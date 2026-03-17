@@ -54,6 +54,8 @@ class DoctorView:
         self.user_name = parent.user_name
         self.requests_list_widget = None
         self.requests_list_layout = None
+        self.inbox_search_input = None
+        self.inbox_all_requests = []
         self.all_radiologists = []
         self.cases_dict = {}
         self.send_case_loader = None
@@ -102,6 +104,24 @@ class DoctorView:
         subtitle = QLabel("Track your submitted cases")
         subtitle.setFont(QFont("Segoe UI", 9))
         subtitle.setStyleSheet("color: #6b7280;")
+
+        self.inbox_search_input = QLineEdit()
+        self.inbox_search_input.setPlaceholderText("Search by patient ID or patient name")
+        self.inbox_search_input.setClearButtonEnabled(True)
+        self.inbox_search_input.setFixedWidth(280)
+        self.inbox_search_input.setStyleSheet("""
+            QLineEdit {
+                background: white;
+                border: 1px solid #d1d5db;
+                border-radius: 6px;
+                padding: 6px 10px;
+                color: #111827;
+            }
+            QLineEdit:focus {
+                border: 1px solid #6366f1;
+            }
+        """)
+        self.inbox_search_input.textChanged.connect(self.apply_inbox_filter)
         
         refresh_btn = QPushButton("🔄 Refresh")
         refresh_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
@@ -123,6 +143,7 @@ class DoctorView:
         header_layout.addWidget(title)
         header_layout.addWidget(subtitle)
         header_layout.addStretch()
+        header_layout.addWidget(self.inbox_search_input)
         header_layout.addWidget(refresh_btn)
         
         layout.addLayout(header_layout)
@@ -151,20 +172,38 @@ class DoctorView:
         return frame
     
     def refresh_inbox(self):
-        """Refresh the inbox with latest requests"""
+        """Fetch latest requests from API, then apply local filter."""
+        response, status_code = api_client.get_doctor_requests(self.user_email)
+        self.inbox_all_requests = response.get('requests', []) if response.get('success') else []
+        self.apply_inbox_filter()
+
+    def apply_inbox_filter(self):
+        """Filter cached inbox requests by patient ID or patient name."""
         # Clear existing items
         while self.requests_list_layout.count():
             child = self.requests_list_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
-        
-        # Get requests from API
-        response, status_code = api_client.get_doctor_requests(self.user_email)
-        requests = response.get('requests', []) if response.get('success') else []
+
+        requests = list(self.inbox_all_requests)
+
+        search_query = ""
+        if self.inbox_search_input is not None:
+            search_query = self.inbox_search_input.text().strip().lower()
+
+        if search_query:
+            requests = [
+                request for request in requests
+                if self._matches_request_search(request, search_query)
+            ]
         
         if not requests:
             # Show empty state
-            empty_label = QLabel("No requests sent yet. Use 'Send to Radiologist' to create one.")
+            if self.inbox_all_requests:
+                empty_text = "No matching requests found."
+            else:
+                empty_text = "No requests sent yet. Use 'Send to Radiologist' to create one."
+            empty_label = QLabel(empty_text)
             empty_label.setFont(QFont("Segoe UI", 9))
             empty_label.setStyleSheet("color: #9ca3af; padding: 20px;")
             empty_label.setAlignment(Qt.AlignCenter)
@@ -182,6 +221,12 @@ class DoctorView:
                 self.requests_list_layout.addWidget(group_card)
         
         self.requests_list_layout.addStretch()
+
+    def _matches_request_search(self, request, search_query):
+        """Return True when query matches patient ID or patient name."""
+        patient_id = str(request.get('patient_id', '')).lower()
+        patient_name = str(request.get('patient_name', '')).lower()
+        return search_query in patient_id or search_query in patient_name
     
     def create_grouped_request_card(self, patient_id, requests):
         """Create a grouped card for multiple requests with the same patient ID"""
