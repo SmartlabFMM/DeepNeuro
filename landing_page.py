@@ -638,8 +638,8 @@ class LandingPage(QMainWindow):
         """Handle diagnosis button click"""
         if diagnosis_type == "Visualize Medical Records":
             self.open_visualization_selector()
-        elif diagnosis_type == "Add Patient":
-            self.view.open_add_patient_form()
+        elif diagnosis_type == "Manage Patients":
+            self.view.open_manage_patients_view()
         elif diagnosis_type == "Send to Radiologist":
             self.view.open_send_case_form()
         elif diagnosis_type == "Upload Test":

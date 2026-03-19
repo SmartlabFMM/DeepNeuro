@@ -2,11 +2,13 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                                QFrame, QSizePolicy, QMessageBox, QDialog, QFormLayout,
                                QLineEdit, QComboBox, QSpinBox, QScrollArea, QPlainTextEdit,
-                               QCompleter)
-from PySide6.QtCore import Qt, QThread, Signal, QStringListModel
-from PySide6.QtGui import QFont, QIntValidator
+                               QCompleter, QTableWidget, QTableWidgetItem, QHeaderView,
+                               QStackedWidget)
+from PySide6.QtCore import Qt, QThread, Signal, QStringListModel, QTimer
+from PySide6.QtGui import QFont, QIntValidator, QPainter, QColor
 from api_client import api_client
 from datetime import datetime
+import math
 
 
 class SendCaseDataLoader(QThread):
@@ -21,13 +23,42 @@ class SendCaseDataLoader(QThread):
         try:
             warning_parts = []
 
+            # Load saved patients for this doctor.
+            patients_response, _ = api_client.get_doctor_patients(self.doctor_email)
+            if patients_response.get('success'):
+                patients = patients_response.get('patients', [])
+                patients_dict = {
+                    str(patient.get('patient_id', '')): {
+                        'patient_name': patient.get('patient_name', ''),
+                        'patient_age': patient.get('patient_age', ''),
+                        'patient_gender': patient.get('patient_sex', ''),
+                    }
+                    for patient in patients
+                    if str(patient.get('patient_id', '')).strip()
+                }
+            else:
+                patients_dict = {}
+                warning_parts.append("saved patients")
+
             previous_cases_response, _ = api_client.get_previous_cases(self.doctor_email)
             if previous_cases_response.get('success'):
                 previous_cases = previous_cases_response.get('cases', [])
-                cases_dict = {case['patient_id']: case for case in previous_cases}
+                previous_cases_dict = {
+                    str(case.get('patient_id', '')): {
+                        'patient_name': case.get('patient_name', ''),
+                        'patient_age': case.get('patient_age', ''),
+                        'patient_gender': case.get('patient_gender', ''),
+                    }
+                    for case in previous_cases
+                    if str(case.get('patient_id', '')).strip()
+                }
             else:
-                cases_dict = {}
+                previous_cases_dict = {}
                 warning_parts.append("case history")
+
+            # Merge both sources so doctors can fetch from patients + previous requests.
+            # Previous requests override saved patient profile values for the same ID.
+            cases_dict = {**patients_dict, **previous_cases_dict}
 
             radiologists_response, _ = api_client.get_all_radiologists()
             if radiologists_response.get('success'):
@@ -45,6 +76,76 @@ class SendCaseDataLoader(QThread):
             self.loaded.emit({}, [], "Unable to load suggestions right now.")
 
 
+class PatientsDataLoader(QThread):
+    """Load patient table data without blocking the UI thread."""
+    loaded = Signal(object, str)
+
+    def __init__(self, doctor_email):
+        super().__init__()
+        self.doctor_email = doctor_email
+
+    def run(self):
+        try:
+            response, _ = api_client.get_doctor_patients(self.doctor_email)
+            if response.get('success'):
+                self.loaded.emit(response.get('patients', []), "")
+            else:
+                self.loaded.emit([], response.get('message', 'Unable to load patients right now.'))
+        except Exception:
+            self.loaded.emit([], 'Unable to load patients right now.')
+
+
+class DotSpinner(QWidget):
+    """Small circular loading spinner inspired by Windows startup dots."""
+
+    def __init__(self, parent=None, dot_count=8, color="#3b82f6"):
+        super().__init__(parent)
+        self.dot_count = dot_count
+        self.active_index = 0
+        self.base_color = QColor(color)
+        self.timer = QTimer(self)
+        self.timer.setInterval(90)
+        self.timer.timeout.connect(self._advance)
+        self.setFixedSize(56, 56)
+
+    def start(self):
+        if not self.timer.isActive():
+            self.timer.start()
+
+    def stop(self):
+        if self.timer.isActive():
+            self.timer.stop()
+        self.active_index = 0
+        self.update()
+
+    def _advance(self):
+        self.active_index = (self.active_index + 1) % self.dot_count
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+
+        center_x = self.width() / 2
+        center_y = self.height() / 2
+        orbit_radius = min(self.width(), self.height()) * 0.32
+        dot_radius = max(2.6, min(self.width(), self.height()) * 0.07)
+
+        for i in range(self.dot_count):
+            distance = (i - self.active_index) % self.dot_count
+            alpha = max(35, 255 - distance * 28)
+            color = QColor(self.base_color)
+            color.setAlpha(alpha)
+            painter.setBrush(color)
+
+            angle = (360 / self.dot_count) * i
+            radians = math.radians(angle)
+            x = center_x + orbit_radius * math.cos(radians)
+            y = center_y + orbit_radius * math.sin(radians)
+            painter.drawEllipse(int(x - dot_radius), int(y - dot_radius), int(dot_radius * 2), int(dot_radius * 2))
+
+
 class DoctorView:
     """Handles all doctor-specific UI components and logic"""
     
@@ -60,6 +161,7 @@ class DoctorView:
         self.all_radiologists = []
         self.cases_dict = {}
         self.send_case_loader = None
+        self.patients_loader = None
         
     def create_buttons_container(self):
         """Create container with diagnosis buttons for doctors"""
@@ -70,14 +172,342 @@ class DoctorView:
         
         # Doctor main actions
         self.btn_visualize = self.parent.create_diagnosis_button("Visualize Medical Records", "#6366f1")
-        self.btn_add_patient = self.parent.create_diagnosis_button("Add Patient", "#10b981")
+        self.btn_manage_patients = self.parent.create_diagnosis_button("Manage Patients", "#10b981")
         self.btn_send_case = self.parent.create_diagnosis_button("Send to Radiologist", "#f59e0b")
         
         layout.addWidget(self.btn_visualize)
-        layout.addWidget(self.btn_add_patient)
+        layout.addWidget(self.btn_manage_patients)
         layout.addWidget(self.btn_send_case)
         
         return container
+
+    def open_manage_patients_view(self):
+        """Open a dialog with the doctor's patient table and quick actions."""
+        dialog = QDialog(self.parent)
+        dialog.setWindowTitle("Manage Patients")
+        dialog.setMinimumWidth(1050)
+        dialog.setMinimumHeight(620)
+        dialog.setStyleSheet("""
+            QDialog {
+                background: #f8fafc;
+            }
+            QFrame#PatientsCard {
+                background: white;
+                border: 1px solid #e5e7eb;
+                border-radius: 10px;
+            }
+            QLabel {
+                color: #1f2937;
+            }
+            QTableWidget {
+                background: white;
+                border: 1px solid #e5e7eb;
+                border-radius: 8px;
+                gridline-color: #e5e7eb;
+                selection-background-color: #dcfce7;
+                selection-color: #14532d;
+                color: #111827;
+            }
+            QHeaderView::section {
+                background: #f3f4f6;
+                color: #1f2937;
+                border: none;
+                border-right: 1px solid #e5e7eb;
+                border-bottom: 1px solid #e5e7eb;
+                padding: 8px;
+                font-weight: 600;
+            }
+            QPushButton {
+                border-radius: 6px;
+                padding: 8px 14px;
+                border: none;
+                font-weight: 600;
+            }
+        """)
+
+        root_layout = QVBoxLayout(dialog)
+        root_layout.setContentsMargins(16, 16, 16, 16)
+        root_layout.setSpacing(10)
+
+        title = QLabel("Patient Management")
+        title.setFont(QFont("Segoe UI", 13, QFont.Bold))
+        subtitle = QLabel("View all your patients and add new records")
+        subtitle.setFont(QFont("Segoe UI", 9))
+        subtitle.setStyleSheet("color: #6b7280;")
+
+        card = QFrame()
+        card.setObjectName("PatientsCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(14, 12, 14, 12)
+        card_layout.setSpacing(10)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+
+        table_title = QLabel("My Patients")
+        table_title.setFont(QFont("Segoe UI", 11, QFont.Bold))
+
+        table_subtitle = QLabel("All profiles linked to your account")
+        table_subtitle.setFont(QFont("Segoe UI", 9))
+        table_subtitle.setStyleSheet("color: #6b7280;")
+
+        title_block = QVBoxLayout()
+        title_block.setContentsMargins(0, 0, 0, 0)
+        title_block.setSpacing(2)
+        title_block.addWidget(table_title)
+        title_block.addWidget(table_subtitle)
+
+        filter_input = QLineEdit()
+        filter_input.setPlaceholderText("Filter by patient ID or name")
+        filter_input.setClearButtonEnabled(True)
+        filter_input.setFixedWidth(280)
+        filter_input.setStyleSheet("""
+            QLineEdit {
+                background: white;
+                border: 1px solid #d1d5db;
+                border-radius: 6px;
+                padding: 6px 10px;
+                color: #111827;
+            }
+            QLineEdit:focus {
+                border: 1px solid #10b981;
+            }
+        """)
+
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setCursor(Qt.PointingHandCursor)
+        refresh_btn.setStyleSheet("""
+            QPushButton {
+                background: #e5e7eb;
+                color: #111827;
+            }
+            QPushButton:hover {
+                background: #d1d5db;
+            }
+        """)
+
+        add_patient_btn = QPushButton("Add Patient")
+        add_patient_btn.setCursor(Qt.PointingHandCursor)
+        add_patient_btn.setStyleSheet("""
+            QPushButton {
+                background: #10b981;
+                color: white;
+            }
+            QPushButton:hover {
+                background: #34d399;
+            }
+        """)
+
+        actions.addLayout(title_block)
+        actions.addStretch()
+        actions.addWidget(filter_input)
+        actions.addWidget(refresh_btn)
+        actions.addWidget(add_patient_btn)
+
+        patients_table = QTableWidget()
+        patients_table.setColumnCount(9)
+        patients_table.setHorizontalHeaderLabels([
+            "Patient ID",
+            "Name",
+            "Age",
+            "Sex",
+            "Email",
+            "Phone",
+            "Has Conditions",
+            "Conditions Notes",
+            "Created"
+        ])
+        patients_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        patients_table.setSelectionBehavior(QTableWidget.SelectRows)
+        patients_table.setSelectionMode(QTableWidget.SingleSelection)
+        patients_table.setAlternatingRowColors(True)
+        patients_table.verticalHeader().setVisible(False)
+        patients_table.horizontalHeader().setStretchLastSection(True)
+        patients_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        patients_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        patients_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        patients_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        patients_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        patients_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        patients_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        patients_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)
+        patients_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeToContents)
+
+        content_stack = QStackedWidget()
+
+        loading_page = QWidget()
+        loading_layout = QVBoxLayout(loading_page)
+        loading_layout.setContentsMargins(0, 0, 0, 0)
+        loading_layout.setSpacing(10)
+        loading_layout.addStretch()
+
+        spinner_container = QWidget()
+        spinner_layout = QVBoxLayout(spinner_container)
+        spinner_layout.setContentsMargins(0, 0, 0, 0)
+        spinner_layout.setSpacing(8)
+        spinner_layout.setAlignment(Qt.AlignCenter)
+
+        loading_spinner = DotSpinner()
+        loading_spinner.start()
+
+        loading_label = QLabel("Loading patients...")
+        loading_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        loading_label.setStyleSheet("color: #6b7280;")
+        loading_label.setAlignment(Qt.AlignCenter)
+
+        spinner_layout.addWidget(loading_spinner, alignment=Qt.AlignCenter)
+        spinner_layout.addWidget(loading_label, alignment=Qt.AlignCenter)
+
+        loading_layout.addWidget(spinner_container, alignment=Qt.AlignCenter)
+        loading_layout.addStretch()
+
+        table_page = QWidget()
+        table_layout = QVBoxLayout(table_page)
+        table_layout.setContentsMargins(0, 0, 0, 0)
+        table_layout.setSpacing(0)
+        table_layout.addWidget(patients_table)
+
+        content_stack.addWidget(loading_page)
+        content_stack.addWidget(table_page)
+
+        all_patients = []
+        dialog_is_alive = {'value': True}
+
+        def is_dialog_alive():
+            return dialog_is_alive['value']
+
+        def set_loading_state(is_loading):
+            if not is_dialog_alive():
+                return
+            try:
+                content_stack.setCurrentIndex(0 if is_loading else 1)
+                refresh_btn.setEnabled(not is_loading)
+                add_patient_btn.setEnabled(not is_loading)
+                filter_input.setEnabled(not is_loading)
+                if is_loading:
+                    loading_spinner.start()
+                else:
+                    loading_spinner.stop()
+            except RuntimeError:
+                # Dialog widgets were already destroyed.
+                dialog_is_alive['value'] = False
+
+        def populate_patients_table(patients):
+            patients_table.setRowCount(0)
+
+            for row_index, patient in enumerate(patients):
+                patients_table.insertRow(row_index)
+
+                values = [
+                    str(patient.get('patient_id', '')),
+                    str(patient.get('patient_name', '')),
+                    str(patient.get('patient_age', '')),
+                    str(patient.get('patient_sex', '')),
+                    str(patient.get('patient_email', '')),
+                    str(patient.get('phone_number', '')),
+                    "Yes" if patient.get('has_conditions') else "No",
+                    str(patient.get('conditions_notes') or '-'),
+                    self._format_request_datetime(patient.get('created_at', '')),
+                ]
+
+                for col_index, value in enumerate(values):
+                    item = QTableWidgetItem(value)
+                    item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+                    patients_table.setItem(row_index, col_index, item)
+
+        def apply_patients_filter():
+            query = filter_input.text().strip().lower()
+            if not query:
+                populate_patients_table(all_patients)
+                return
+
+            filtered_patients = [
+                patient for patient in all_patients
+                if query in str(patient.get('patient_id', '')).lower()
+                or query in str(patient.get('patient_name', '')).lower()
+            ]
+            populate_patients_table(filtered_patients)
+
+        def load_patients_async(show_error=True):
+            if self.patients_loader is not None:
+                try:
+                    if self.patients_loader.isRunning():
+                        return
+                except RuntimeError:
+                    # Qt already deleted the underlying C++ object.
+                    self.patients_loader = None
+
+            set_loading_state(True)
+
+            self.patients_loader = PatientsDataLoader(self.user_email)
+
+            def on_loaded(patients, error_message):
+                if not is_dialog_alive():
+                    return
+                set_loading_state(False)
+                all_patients.clear()
+                all_patients.extend(patients)
+                apply_patients_filter()
+                if error_message and show_error:
+                    self.parent.show_message_box("Error", error_message, "warning")
+
+            def on_loader_finished():
+                loader = self.patients_loader
+                self.patients_loader = None
+                if loader is not None:
+                    try:
+                        loader.deleteLater()
+                    except RuntimeError:
+                        pass
+
+            self.patients_loader.loaded.connect(on_loaded)
+            self.patients_loader.finished.connect(on_loader_finished)
+            self.patients_loader.start()
+
+        def on_dialog_finished(_result):
+            dialog_is_alive['value'] = False
+            loader = self.patients_loader
+            if loader is None:
+                return
+            try:
+                loader.loaded.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+
+        def on_add_patient_click():
+            self.open_add_patient_form(on_success=lambda: load_patients_async(show_error=False))
+
+        refresh_btn.clicked.connect(lambda: load_patients_async(show_error=True))
+        add_patient_btn.clicked.connect(on_add_patient_click)
+        filter_input.textChanged.connect(lambda _: apply_patients_filter())
+
+        card_layout.addLayout(actions)
+        card_layout.addWidget(content_stack)
+
+        close_btn = QPushButton("Close")
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background: #e5e7eb;
+                color: #111827;
+                min-width: 96px;
+            }
+            QPushButton:hover {
+                background: #d1d5db;
+            }
+        """)
+        close_btn.clicked.connect(dialog.accept)
+
+        root_layout.addWidget(title)
+        root_layout.addWidget(subtitle)
+        root_layout.addWidget(card, 1)
+        root_layout.addWidget(close_btn, alignment=Qt.AlignRight)
+
+        dialog.finished.connect(on_dialog_finished)
+
+        set_loading_state(True)
+        load_patients_async(show_error=True)
+        dialog.exec()
     
     def create_inbox_view(self):
         """Create inbox view to display sent requests"""
@@ -266,7 +696,7 @@ class DoctorView:
         """
 
     def _format_request_datetime(self, date_value):
-        """Format date as DD-MM-YYYY."""
+        """Format date as DD-MM-YYYY HH:MM."""
         if not date_value:
             return 'N/A'
 
@@ -274,12 +704,15 @@ class DoctorView:
         try:
             normalized = date_str.replace('Z', '+00:00')
             date_obj = datetime.fromisoformat(normalized)
-            return date_obj.strftime("%d-%m-%Y")
+            return date_obj.strftime("%d-%m-%Y %H:%M")
         except Exception:
             pass
 
+        if len(date_str) >= 16 and date_str[4] == '-' and date_str[7] == '-':
+            return f"{date_str[8:10]}-{date_str[5:7]}-{date_str[0:4]} {date_str[11:16]}"
+
         if len(date_str) >= 10 and date_str[4] == '-' and date_str[7] == '-':
-            return f"{date_str[8:10]}-{date_str[5:7]}-{date_str[0:4]}"
+            return f"{date_str[8:10]}-{date_str[5:7]}-{date_str[0:4]} 00:00"
 
         return date_str
     
@@ -327,12 +760,15 @@ class DoctorView:
         header_layout.setContentsMargins(12, 10, 12, 10)
         header_layout.setSpacing(16)
         
-        # Patient ID
-        case_label = QLabel(f"🆔 {patient_id}")
+        # Patient ID + name
+        sample_request = requests[0] if requests else {}
+        patient_name = str(sample_request.get('patient_name', '')).strip()
+        case_display = f"🆔 {patient_id} - {patient_name}" if patient_name else f"🆔 {patient_id}"
+        case_label = QLabel(case_display)
         case_font = QFont("Segoe UI", 11, QFont.Bold)
         case_label.setFont(case_font)
         case_label.setStyleSheet("color: #111827;")
-        case_label.setMinimumWidth(150)
+        case_label.setMinimumWidth(260)
         
         # Count badge
         count_text = f"{len(requests)} request{'s' if len(requests) > 1 else ''}"
@@ -351,7 +787,7 @@ class DoctorView:
         latest_request = max(requests, key=lambda r: str(r.get('created_at', '')))
         latest_date = self._format_request_datetime(latest_request.get('created_at', 'N/A'))
 
-        latest_date_label = QLabel(f"Latest: {latest_date}")
+        latest_date_label = QLabel(f"📅 {latest_date}")
         latest_date_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
         latest_date_label.setStyleSheet("color: #4b5563;")
         latest_date_label.setMinimumWidth(180)
@@ -424,12 +860,14 @@ class DoctorView:
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(16)
         
-        # Patient ID
-        case_label = QLabel(f"🆔 {request['patient_id']}")
+        # Patient ID + name
+        patient_name = str(request.get('patient_name', '')).strip()
+        case_display = f"🆔 {request['patient_id']} - {patient_name}" if patient_name else f"🆔 {request['patient_id']}"
+        case_label = QLabel(case_display)
         case_font = QFont("Segoe UI", 11, QFont.Bold)
         case_label.setFont(case_font)
         case_label.setStyleSheet("color: #111827;")
-        case_label.setMinimumWidth(150)
+        case_label.setMinimumWidth(260)
         
         # Sender info
         sender_label = QLabel(f"To: {request['radiologist_email']}")
@@ -487,9 +925,17 @@ class DoctorView:
         
         # Make card clickable
         card.setCursor(Qt.PointingHandCursor)
-        card.mousePressEvent = lambda e, req=request, req_card=card: self.show_request_details(req, req_card)
+        card.mouseReleaseEvent = lambda e, req=request, req_card=card: self._on_request_card_clicked(e, req, req_card)
         
         return card
+
+    def _on_request_card_clicked(self, event, request, card_widget):
+        """Open request details only for an explicit left-click release."""
+        if event.button() != Qt.LeftButton:
+            event.ignore()
+            return
+        event.accept()
+        self.show_request_details(request, card_widget)
     
     def show_request_details(self, request, card_widget=None):
         """Show detailed view of a request in a dialog"""
@@ -629,7 +1075,7 @@ class DoctorView:
         
         dialog.exec()
 
-    def open_add_patient_form(self):
+    def open_add_patient_form(self, on_success=None):
         """Open the add patient dialog for doctors"""
         dialog = QDialog(self.parent)
         dialog.setWindowTitle("Add Patient")
@@ -867,6 +1313,8 @@ class DoctorView:
 
             if response.get('success'):
                 dialog.accept()
+                if callable(on_success):
+                    on_success()
                 self.parent.show_message_box(
                     "Patient Added",
                     "Patient information has been saved successfully.",
@@ -1007,10 +1455,43 @@ class DoctorView:
         form.setSpacing(10)
         form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
+        content_stack = QStackedWidget()
+
+        loading_page = QWidget()
+        loading_layout = QVBoxLayout(loading_page)
+        loading_layout.setContentsMargins(0, 0, 0, 0)
+        loading_layout.setSpacing(10)
+        loading_layout.addStretch()
+
+        spinner_container = QWidget()
+        spinner_layout = QVBoxLayout(spinner_container)
+        spinner_layout.setContentsMargins(0, 0, 0, 0)
+        spinner_layout.setSpacing(8)
+        spinner_layout.setAlignment(Qt.AlignCenter)
+
+        loading_spinner = DotSpinner()
+        loading_spinner.start()
+
+        loading_label = QLabel("Loading case suggestions...")
+        loading_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        loading_label.setStyleSheet("color: #6b7280;")
+        loading_label.setAlignment(Qt.AlignCenter)
+
+        spinner_layout.addWidget(loading_spinner, alignment=Qt.AlignCenter)
+        spinner_layout.addWidget(loading_label, alignment=Qt.AlignCenter)
+
+        loading_layout.addWidget(spinner_container, alignment=Qt.AlignCenter)
+        loading_layout.addStretch()
+
+        form_page = QWidget()
+        form_page_layout = QVBoxLayout(form_page)
+        form_page_layout.setContentsMargins(0, 0, 0, 0)
+        form_page_layout.setSpacing(12)
+
         self.cases_dict = {}
 
         patient_id = QLineEdit()
-        patient_id.setPlaceholderText("Type to search previous patients or enter patient ID")
+        patient_id.setPlaceholderText("Type to search saved patients/history or enter patient ID")
 
         # Add autocomplete for patient IDs (loaded in background)
         patient_id_model = QStringListModel([])
@@ -1204,10 +1685,33 @@ class DoctorView:
 
         form_card_layout.addLayout(form)
 
+        form_page_layout.addWidget(form_card)
+        form_page_layout.addLayout(actions)
+
+        content_stack.addWidget(loading_page)
+        content_stack.addWidget(form_page)
+
+        dialog_is_alive = {'value': True}
+
+        def is_dialog_alive():
+            return dialog_is_alive['value']
+
+        def set_send_case_loading_state(is_loading):
+            if not is_dialog_alive():
+                return
+            try:
+                content_stack.setCurrentIndex(0 if is_loading else 1)
+                send_btn.setEnabled(not is_loading)
+                if is_loading:
+                    loading_spinner.start()
+                else:
+                    loading_spinner.stop()
+            except RuntimeError:
+                dialog_is_alive['value'] = False
+
         layout.addWidget(title)
         layout.addWidget(subtitle)
-        layout.addWidget(form_card)
-        layout.addLayout(actions)
+        layout.addWidget(content_stack)
 
         dialog_layout = QVBoxLayout(dialog)
         dialog_layout.setContentsMargins(0, 0, 0, 0)
@@ -1215,6 +1719,9 @@ class DoctorView:
 
         # Load autocomplete data after dialog is created so the form appears instantly.
         def on_loader_finished(cases_dict, radiologists, warning_message):
+            if not is_dialog_alive():
+                return
+
             self.cases_dict = cases_dict
             self.all_radiologists = radiologists
 
@@ -1231,9 +1738,40 @@ class DoctorView:
             else:
                 radiologist_combo.setCurrentIndex(-1)
 
+            set_send_case_loading_state(False)
 
-        self.send_case_loader = SendCaseDataLoader(self.user_email)
-        self.send_case_loader.loaded.connect(on_loader_finished)
-        self.send_case_loader.start()
+            if warning_message:
+                self.parent.show_message_box("Warning", warning_message, "warning")
+
+        def on_loader_thread_finished():
+            loader = getattr(dialog, '_send_case_loader', None)
+            if loader is None:
+                return
+            try:
+                loader.deleteLater()
+            except RuntimeError:
+                pass
+            if self.send_case_loader is loader:
+                self.send_case_loader = None
+            dialog._send_case_loader = None
+
+        def on_dialog_finished(_result):
+            dialog_is_alive['value'] = False
+            loader = getattr(dialog, '_send_case_loader', None)
+            if loader is None:
+                return
+            try:
+                loader.loaded.disconnect(on_loader_finished)
+            except (RuntimeError, TypeError):
+                pass
+
+        set_send_case_loading_state(True)
+
+        dialog._send_case_loader = SendCaseDataLoader(self.user_email)
+        self.send_case_loader = dialog._send_case_loader
+        dialog._send_case_loader.loaded.connect(on_loader_finished)
+        dialog._send_case_loader.finished.connect(on_loader_thread_finished)
+        dialog.finished.connect(on_dialog_finished)
+        dialog._send_case_loader.start()
 
         dialog.exec()

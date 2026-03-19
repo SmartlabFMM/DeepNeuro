@@ -223,7 +223,7 @@ class RadiologistView:
         """
 
     def _format_request_datetime(self, date_value):
-        """Format date as DD-MM-YYYY."""
+        """Format date as DD-MM-YYYY HH:MM."""
         if not date_value:
             return 'N/A'
 
@@ -231,12 +231,15 @@ class RadiologistView:
         try:
             normalized = date_str.replace('Z', '+00:00')
             date_obj = datetime.fromisoformat(normalized)
-            return date_obj.strftime("%d-%m-%Y")
+            return date_obj.strftime("%d-%m-%Y %H:%M")
         except Exception:
             pass
 
+        if len(date_str) >= 16 and date_str[4] == '-' and date_str[7] == '-':
+            return f"{date_str[8:10]}-{date_str[5:7]}-{date_str[0:4]} {date_str[11:16]}"
+
         if len(date_str) >= 10 and date_str[4] == '-' and date_str[7] == '-':
-            return f"{date_str[8:10]}-{date_str[5:7]}-{date_str[0:4]}"
+            return f"{date_str[8:10]}-{date_str[5:7]}-{date_str[0:4]} 00:00"
 
         return date_str
     
@@ -284,12 +287,15 @@ class RadiologistView:
         header_layout.setContentsMargins(12, 10, 12, 10)
         header_layout.setSpacing(16)
         
-        # Patient ID
-        case_label = QLabel(f"🆔 {patient_id}")
+        # Patient ID + name
+        sample_request = requests[0] if requests else {}
+        patient_name = str(sample_request.get('patient_name', '')).strip()
+        case_display = f"🆔 {patient_id} - {patient_name}" if patient_name else f"🆔 {patient_id}"
+        case_label = QLabel(case_display)
         case_font = QFont("Segoe UI", 11, QFont.Bold)
         case_label.setFont(case_font)
         case_label.setStyleSheet("color: #111827;")
-        case_label.setMinimumWidth(150)
+        case_label.setMinimumWidth(260)
         
         # Count badge
         count_text = f"{len(requests)} request{'s' if len(requests) > 1 else ''}"
@@ -308,7 +314,7 @@ class RadiologistView:
         latest_request = max(requests, key=lambda r: str(r.get('created_at', '')))
         latest_date = self._format_request_datetime(latest_request.get('created_at', 'N/A'))
 
-        latest_date_label = QLabel(f"Latest: {latest_date}")
+        latest_date_label = QLabel(f"📅 {latest_date}")
         latest_date_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
         latest_date_label.setStyleSheet("color: #4b5563;")
         latest_date_label.setMinimumWidth(180)
@@ -381,12 +387,14 @@ class RadiologistView:
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(16)
         
-        # Patient ID
-        case_label = QLabel(f"🆔 {request['patient_id']}")
+        # Patient ID + name
+        patient_name = str(request.get('patient_name', '')).strip()
+        case_display = f"🆔 {request['patient_id']} - {patient_name}" if patient_name else f"🆔 {request['patient_id']}"
+        case_label = QLabel(case_display)
         case_font = QFont("Segoe UI", 11, QFont.Bold)
         case_label.setFont(case_font)
         case_label.setStyleSheet("color: #111827;")
-        case_label.setMinimumWidth(150)
+        case_label.setMinimumWidth(260)
         
         # Sender info (doctor name)
         sender_label = QLabel(f"From: {request['doctor_name']}")
@@ -444,9 +452,17 @@ class RadiologistView:
         
         # Make card clickable
         card.setCursor(Qt.PointingHandCursor)
-        card.mousePressEvent = lambda e, req=request, req_card=card: self.show_radiologist_request_details(req, req_card)
+        card.mouseReleaseEvent = lambda e, req=request, req_card=card: self._on_radiologist_request_card_clicked(e, req, req_card)
         
         return card
+
+    def _on_radiologist_request_card_clicked(self, event, request, card_widget):
+        """Open request details only for an explicit left-click release."""
+        if event.button() != Qt.LeftButton:
+            event.ignore()
+            return
+        event.accept()
+        self.show_radiologist_request_details(request, card_widget)
     
     def show_radiologist_request_details(self, request, card_widget=None):
         """Show detailed view of a request received by radiologist"""
