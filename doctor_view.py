@@ -56,6 +56,7 @@ class DoctorView:
         self.requests_list_layout = None
         self.inbox_search_input = None
         self.inbox_all_requests = []
+        self.expanded_patient_groups = set()
         self.all_radiologists = []
         self.cases_dict = {}
         self.send_case_loader = None
@@ -227,6 +228,60 @@ class DoctorView:
         patient_id = str(request.get('patient_id', '')).lower()
         patient_name = str(request.get('patient_name', '')).lower()
         return search_query in patient_id or search_query in patient_name
+
+    def _mark_request_read_in_cache(self, request_id):
+        """Keep local cache in sync after marking a request as read."""
+        for cached_request in self.inbox_all_requests:
+            if cached_request.get('id') == request_id:
+                cached_request['is_read'] = 1
+                break
+
+    def _request_card_style(self, is_unread):
+        if is_unread:
+            return """
+                QFrame {
+                    background: #eff6ff;
+                    border: 2px solid #3b82f6;
+                    border-radius: 8px;
+                    padding: 12px;
+                }
+                QFrame:hover {
+                    background: #dbeafe;
+                    border-color: #1e40af;
+                    cursor: pointer;
+                }
+            """
+        return """
+            QFrame {
+                background: #f9fafb;
+                border: 1px solid #e5e7eb;
+                border-radius: 8px;
+                padding: 12px;
+            }
+            QFrame:hover {
+                background: #f3f4f6;
+                border-color: #d1d5db;
+                cursor: pointer;
+            }
+        """
+
+    def _format_request_datetime(self, date_value):
+        """Format date as DD-MM-YYYY."""
+        if not date_value:
+            return 'N/A'
+
+        date_str = str(date_value).strip()
+        try:
+            normalized = date_str.replace('Z', '+00:00')
+            date_obj = datetime.fromisoformat(normalized)
+            return date_obj.strftime("%d-%m-%Y")
+        except Exception:
+            pass
+
+        if len(date_str) >= 10 and date_str[4] == '-' and date_str[7] == '-':
+            return f"{date_str[8:10]}-{date_str[5:7]}-{date_str[0:4]}"
+
+        return date_str
     
     def create_grouped_request_card(self, patient_id, requests):
         """Create a grouped card for multiple requests with the same patient ID"""
@@ -292,6 +347,14 @@ class DoctorView:
             border-radius: 4px;
             padding: 4px 12px;
         """)
+
+        latest_request = max(requests, key=lambda r: str(r.get('created_at', '')))
+        latest_date = self._format_request_datetime(latest_request.get('created_at', 'N/A'))
+
+        latest_date_label = QLabel(f"Latest: {latest_date}")
+        latest_date_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        latest_date_label.setStyleSheet("color: #4b5563;")
+        latest_date_label.setMinimumWidth(180)
         
         # Expand/collapse button
         expand_btn = QPushButton("▼ Expand")
@@ -310,7 +373,8 @@ class DoctorView:
             }
         """)
         expand_btn.setFixedWidth(100)
-        
+
+        header_layout.addWidget(latest_date_label)
         header_layout.addWidget(case_label)
         header_layout.addWidget(count_label)
         header_layout.addStretch()
@@ -328,14 +392,22 @@ class DoctorView:
             request_card = self.create_request_card(request)
             content_layout.addWidget(request_card)
         
-        content_widget.setVisible(False)  # Start collapsed
+        patient_group_key = str(patient_id)
+        is_expanded = patient_group_key in self.expanded_patient_groups
+        content_widget.setVisible(is_expanded)
+        expand_btn.setText("▲ Collapse" if is_expanded else "▼ Expand")
         container_layout.addWidget(content_widget)
         
         # Toggle expand/collapse
         def toggle_expand():
             is_visible = content_widget.isVisible()
-            content_widget.setVisible(not is_visible)
-            expand_btn.setText("▲ Collapse" if not is_visible else "▼ Expand")
+            new_is_visible = not is_visible
+            content_widget.setVisible(new_is_visible)
+            expand_btn.setText("▲ Collapse" if new_is_visible else "▼ Expand")
+            if new_is_visible:
+                self.expanded_patient_groups.add(patient_group_key)
+            else:
+                self.expanded_patient_groups.discard(patient_group_key)
         
         expand_btn.clicked.connect(toggle_expand)
         
@@ -346,34 +418,7 @@ class DoctorView:
         is_unread = not request.get('is_read', 0)
         
         card = QFrame()
-        if is_unread:
-            card.setStyleSheet("""
-                QFrame {
-                    background: #eff6ff;
-                    border: 2px solid #3b82f6;
-                    border-radius: 8px;
-                    padding: 12px;
-                }
-                QFrame:hover {
-                    background: #dbeafe;
-                    border-color: #1e40af;
-                    cursor: pointer;
-                }
-            """)
-        else:
-            card.setStyleSheet("""
-                QFrame {
-                    background: #f9fafb;
-                    border: 1px solid #e5e7eb;
-                    border-radius: 8px;
-                    padding: 12px;
-                }
-                QFrame:hover {
-                    background: #f3f4f6;
-                    border-color: #d1d5db;
-                    cursor: pointer;
-                }
-            """)
+        card.setStyleSheet(self._request_card_style(is_unread))
         
         layout = QHBoxLayout(card)
         layout.setContentsMargins(12, 10, 12, 10)
@@ -388,9 +433,7 @@ class DoctorView:
         
         # Sender info
         sender_label = QLabel(f"To: {request['radiologist_email']}")
-        sender_font = QFont("Segoe UI", 9)
-        if is_unread:
-            sender_font.setBold(True)
+        sender_font = QFont("Segoe UI", 9, QFont.Bold)
         sender_label.setFont(sender_font)
         sender_label.setStyleSheet("color: #6b7280;")
         sender_label.setMinimumWidth(200)
@@ -428,39 +471,35 @@ class DoctorView:
         priority_label.setFixedWidth(120)
         
         # Date sent
-        try:
-            date_str = request['created_at']
-            if 'T' in date_str:
-                date_obj = datetime.fromisoformat(date_str)
-                formatted_date = date_obj.strftime("%b %d, %Y %I:%M %p")
-            else:
-                formatted_date = date_str
-        except:
-            formatted_date = request.get('created_at', 'N/A')
+        formatted_date = self._format_request_datetime(request.get('created_at', 'N/A'))
         
         date_label = QLabel(f"📅 {formatted_date}")
-        date_label.setFont(QFont("Segoe UI", 8))
+        date_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
         date_label.setStyleSheet("color: #6b7280;")
         date_label.setMinimumWidth(150)
         
+        layout.addWidget(date_label)
         layout.addWidget(case_label)
         layout.addWidget(sender_label)
         layout.addWidget(status_label)
         layout.addWidget(priority_label)
-        layout.addWidget(date_label)
         layout.addStretch()
         
         # Make card clickable
         card.setCursor(Qt.PointingHandCursor)
-        card.mousePressEvent = lambda e: self.show_request_details(request)
+        card.mousePressEvent = lambda e, req=request, req_card=card: self.show_request_details(req, req_card)
         
         return card
     
-    def show_request_details(self, request):
+    def show_request_details(self, request, card_widget=None):
         """Show detailed view of a request in a dialog"""
         # Mark as read immediately when dialog opens
         if request['id']:
             api_client.mark_read_doctor(request['id'])
+            request['is_read'] = 1
+            self._mark_request_read_in_cache(request['id'])
+            if card_widget is not None:
+                card_widget.setStyleSheet(self._request_card_style(False))
         
         dialog = QDialog(self.parent)
         dialog.setWindowTitle(f"Request Details - {request['patient_id']}")
@@ -589,9 +628,6 @@ class DoctorView:
         layout.addWidget(close_btn)
         
         dialog.exec()
-        
-        # Refresh inbox after dialog closes to update card styling
-        self.refresh_inbox()
 
     def open_add_patient_form(self):
         """Open the add patient dialog for doctors"""
