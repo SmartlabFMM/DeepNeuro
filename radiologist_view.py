@@ -1,11 +1,83 @@
 """Radiologist-specific landing page view"""
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                                QFrame, QSizePolicy, QMessageBox, QDialog,
-                               QScrollArea, QPlainTextEdit, QLineEdit)
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+                               QApplication, QScrollArea, QPlainTextEdit, QLineEdit)
+from PySide6.QtCore import Qt, QTimer, QThread, Signal
+from PySide6.QtGui import QFont, QPainter, QColor
 from api_client import api_client
 from datetime import datetime
+import math
+import time
+
+
+class DotSpinner(QWidget):
+    """Small circular loading spinner inspired by Windows startup dots."""
+
+    def __init__(self, parent=None, dot_count=8, color="#3b82f6"):
+        super().__init__(parent)
+        self.dot_count = dot_count
+        self.active_index = 0
+        self.base_color = QColor(color)
+        self.timer = QTimer(self)
+        self.timer.setInterval(90)
+        self.timer.timeout.connect(self._advance)
+        self.setFixedSize(56, 56)
+
+    def start(self):
+        if not self.timer.isActive():
+            self.timer.start()
+
+    def stop(self):
+        if self.timer.isActive():
+            self.timer.stop()
+        self.active_index = 0
+        self.update()
+
+    def _advance(self):
+        self.active_index = (self.active_index + 1) % self.dot_count
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+
+        center_x = self.width() / 2
+        center_y = self.height() / 2
+        orbit_radius = min(self.width(), self.height()) * 0.32
+        dot_radius = max(2.6, min(self.width(), self.height()) * 0.07)
+
+        for i in range(self.dot_count):
+            distance = (i - self.active_index) % self.dot_count
+            alpha = max(35, 255 - distance * 28)
+            color = QColor(self.base_color)
+            color.setAlpha(alpha)
+            painter.setBrush(color)
+
+            angle = (360 / self.dot_count) * i
+            radians = math.radians(angle)
+            x = center_x + orbit_radius * math.cos(radians)
+            y = center_y + orbit_radius * math.sin(radians)
+            painter.drawEllipse(int(x - dot_radius), int(y - dot_radius), int(dot_radius * 2), int(dot_radius * 2))
+
+
+class RadiologistRequestsDataLoader(QThread):
+    """Load radiologist requests without blocking the UI thread."""
+    loaded = Signal(object, str)
+
+    def __init__(self, radiologist_email):
+        super().__init__()
+        self.radiologist_email = radiologist_email
+
+    def run(self):
+        try:
+            response, _ = api_client.get_radiologist_requests(self.radiologist_email)
+            if response.get('success'):
+                self.loaded.emit(response.get('requests', []), "")
+            else:
+                self.loaded.emit([], response.get('message', 'Unable to load requests right now.'))
+        except Exception:
+            self.loaded.emit([], 'Unable to load requests right now.')
 
 
 class RadiologistView:
@@ -19,6 +91,10 @@ class RadiologistView:
         self.radiologist_requests_layout = None
         self.requests_search_input = None
         self.all_received_requests = []
+        self.radiologist_loading_spinner = None
+        self.radiologist_requests_loader = None
+        self.radiologist_refresh_token = 0
+        self.radiologist_click_guard_until = 0.0
         self.expanded_patient_groups = set()
         
     def create_buttons_container(self):
@@ -134,17 +210,98 @@ class RadiologistView:
     
     def refresh_radiologist_requests(self):
         """Fetch latest requests from API, then apply local filter."""
-        response, status_code = api_client.get_radiologist_requests(self.user_email)
-        self.all_received_requests = response.get('requests', []) if response.get('success') else []
-        self.apply_radiologist_filter()
+        if self.radiologist_requests_layout is None:
+            return
 
-    def apply_radiologist_filter(self):
-        """Filter cached received requests by patient ID or patient name."""
-        # Clear existing items
+        self.radiologist_refresh_token += 1
+        refresh_token = self.radiologist_refresh_token
+        refresh_started = datetime.now()
+
+        self._show_radiologist_loading()
+        QApplication.processEvents()
+
+        if self.radiologist_requests_loader is not None:
+            try:
+                if self.radiologist_requests_loader.isRunning():
+                    return
+            except RuntimeError:
+                self.radiologist_requests_loader = None
+
+        self.radiologist_requests_loader = RadiologistRequestsDataLoader(self.user_email)
+
+        def finish_refresh(requests, error_message):
+            if refresh_token != self.radiologist_refresh_token:
+                return
+            if self.radiologist_requests_layout is None:
+                return
+            self.all_received_requests = requests
+            self.apply_radiologist_filter()
+            if error_message:
+                self.parent.show_message_box("Error", error_message, "warning")
+
+        def on_loaded(requests, error_message):
+            elapsed_ms = int((datetime.now() - refresh_started).total_seconds() * 1000)
+            delay_ms = max(0, 1000 - elapsed_ms)
+            if delay_ms > 0:
+                QTimer.singleShot(delay_ms, lambda: finish_refresh(requests, error_message))
+            else:
+                finish_refresh(requests, error_message)
+
+        def on_loader_finished():
+            loader = self.radiologist_requests_loader
+            self.radiologist_requests_loader = None
+            if loader is not None:
+                try:
+                    loader.deleteLater()
+                except RuntimeError:
+                    pass
+
+        self.radiologist_requests_loader.loaded.connect(on_loaded)
+        self.radiologist_requests_loader.finished.connect(on_loader_finished)
+        self.radiologist_requests_loader.start()
+
+    def _clear_radiologist_requests_layout(self):
+        """Remove all current widgets from received requests layout."""
+        self.radiologist_loading_spinner = None
         while self.radiologist_requests_layout.count():
             child = self.radiologist_requests_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
+
+    def _show_radiologist_loading(self):
+        """Show a centered loading state while refreshing received requests."""
+        self._clear_radiologist_requests_layout()
+
+        loading_container = QWidget()
+        loading_container.setAttribute(Qt.WA_TranslucentBackground, True)
+        loading_container.setStyleSheet("background: transparent; border: none;")
+        loading_layout = QVBoxLayout(loading_container)
+        loading_layout.setContentsMargins(0, 16, 0, 16)
+        loading_layout.setSpacing(8)
+        loading_layout.setAlignment(Qt.AlignCenter)
+
+        self.radiologist_loading_spinner = DotSpinner()
+        self.radiologist_loading_spinner.start()
+
+        loading_label = QLabel("Loading requests...")
+        loading_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        loading_label.setStyleSheet("color: #6b7280; background: transparent;")
+        loading_label.setAlignment(Qt.AlignCenter)
+
+        loading_layout.addWidget(self.radiologist_loading_spinner, alignment=Qt.AlignCenter)
+        loading_layout.addWidget(loading_label, alignment=Qt.AlignCenter)
+
+        self.radiologist_requests_layout.addStretch()
+        self.radiologist_requests_layout.addWidget(loading_container, alignment=Qt.AlignCenter)
+        self.radiologist_requests_layout.addStretch()
+
+    def apply_radiologist_filter(self):
+        """Filter cached received requests by patient ID or patient name."""
+        # Prevent accidental card click right after typing/clear-button interactions.
+        self.radiologist_click_guard_until = time.monotonic() + 0.30
+
+        # Clear existing items
+        self._clear_radiologist_requests_layout()
 
         requests = list(self.all_received_requests)
 
@@ -459,6 +616,9 @@ class RadiologistView:
     def _on_radiologist_request_card_clicked(self, event, request, card_widget):
         """Open request details only for an explicit left-click release."""
         if event.button() != Qt.LeftButton:
+            event.ignore()
+            return
+        if time.monotonic() < self.radiologist_click_guard_until:
             event.ignore()
             return
         event.accept()

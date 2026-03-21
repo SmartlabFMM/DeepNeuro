@@ -2,13 +2,14 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                                QFrame, QSizePolicy, QMessageBox, QDialog, QFormLayout,
                                QLineEdit, QComboBox, QSpinBox, QScrollArea, QPlainTextEdit,
-                               QCompleter, QTableWidget, QTableWidgetItem, QHeaderView,
+                               QApplication, QCompleter, QTableWidget, QTableWidgetItem, QHeaderView,
                                QStackedWidget)
 from PySide6.QtCore import Qt, QThread, Signal, QStringListModel, QTimer
 from PySide6.QtGui import QFont, QIntValidator, QPainter, QColor
 from api_client import api_client
 from datetime import datetime
 import math
+import time
 
 
 class SendCaseDataLoader(QThread):
@@ -95,6 +96,25 @@ class PatientsDataLoader(QThread):
             self.loaded.emit([], 'Unable to load patients right now.')
 
 
+class DoctorRequestsDataLoader(QThread):
+    """Load doctor inbox requests without blocking the UI thread."""
+    loaded = Signal(object, str)
+
+    def __init__(self, doctor_email):
+        super().__init__()
+        self.doctor_email = doctor_email
+
+    def run(self):
+        try:
+            response, _ = api_client.get_doctor_requests(self.doctor_email)
+            if response.get('success'):
+                self.loaded.emit(response.get('requests', []), "")
+            else:
+                self.loaded.emit([], response.get('message', 'Unable to load requests right now.'))
+        except Exception:
+            self.loaded.emit([], 'Unable to load requests right now.')
+
+
 class DotSpinner(QWidget):
     """Small circular loading spinner inspired by Windows startup dots."""
 
@@ -157,6 +177,10 @@ class DoctorView:
         self.requests_list_layout = None
         self.inbox_search_input = None
         self.inbox_all_requests = []
+        self.inbox_loading_spinner = None
+        self.inbox_loader = None
+        self.inbox_refresh_token = 0
+        self.inbox_click_guard_until = 0.0
         self.expanded_patient_groups = set()
         self.all_radiologists = []
         self.cases_dict = {}
@@ -604,17 +628,98 @@ class DoctorView:
     
     def refresh_inbox(self):
         """Fetch latest requests from API, then apply local filter."""
-        response, status_code = api_client.get_doctor_requests(self.user_email)
-        self.inbox_all_requests = response.get('requests', []) if response.get('success') else []
-        self.apply_inbox_filter()
+        if self.requests_list_layout is None:
+            return
 
-    def apply_inbox_filter(self):
-        """Filter cached inbox requests by patient ID or patient name."""
-        # Clear existing items
+        self.inbox_refresh_token += 1
+        refresh_token = self.inbox_refresh_token
+        refresh_started = datetime.now()
+
+        self._show_inbox_loading()
+        QApplication.processEvents()
+
+        if self.inbox_loader is not None:
+            try:
+                if self.inbox_loader.isRunning():
+                    return
+            except RuntimeError:
+                self.inbox_loader = None
+
+        self.inbox_loader = DoctorRequestsDataLoader(self.user_email)
+
+        def finish_refresh(requests, error_message):
+            if refresh_token != self.inbox_refresh_token:
+                return
+            if self.requests_list_layout is None:
+                return
+            self.inbox_all_requests = requests
+            self.apply_inbox_filter()
+            if error_message:
+                self.parent.show_message_box("Error", error_message, "warning")
+
+        def on_loaded(requests, error_message):
+            elapsed_ms = int((datetime.now() - refresh_started).total_seconds() * 1000)
+            delay_ms = max(0, 1000 - elapsed_ms)
+            if delay_ms > 0:
+                QTimer.singleShot(delay_ms, lambda: finish_refresh(requests, error_message))
+            else:
+                finish_refresh(requests, error_message)
+
+        def on_loader_finished():
+            loader = self.inbox_loader
+            self.inbox_loader = None
+            if loader is not None:
+                try:
+                    loader.deleteLater()
+                except RuntimeError:
+                    pass
+
+        self.inbox_loader.loaded.connect(on_loaded)
+        self.inbox_loader.finished.connect(on_loader_finished)
+        self.inbox_loader.start()
+
+    def _clear_inbox_layout(self):
+        """Remove all current widgets from inbox list layout."""
+        self.inbox_loading_spinner = None
         while self.requests_list_layout.count():
             child = self.requests_list_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
+
+    def _show_inbox_loading(self):
+        """Show a centered loading state while refreshing inbox requests."""
+        self._clear_inbox_layout()
+
+        loading_container = QWidget()
+        loading_container.setAttribute(Qt.WA_TranslucentBackground, True)
+        loading_container.setStyleSheet("background: transparent; border: none;")
+        loading_layout = QVBoxLayout(loading_container)
+        loading_layout.setContentsMargins(0, 16, 0, 16)
+        loading_layout.setSpacing(8)
+        loading_layout.setAlignment(Qt.AlignCenter)
+
+        self.inbox_loading_spinner = DotSpinner()
+        self.inbox_loading_spinner.start()
+
+        loading_label = QLabel("Loading requests...")
+        loading_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        loading_label.setStyleSheet("color: #6b7280; background: transparent;")
+        loading_label.setAlignment(Qt.AlignCenter)
+
+        loading_layout.addWidget(self.inbox_loading_spinner, alignment=Qt.AlignCenter)
+        loading_layout.addWidget(loading_label, alignment=Qt.AlignCenter)
+
+        self.requests_list_layout.addStretch()
+        self.requests_list_layout.addWidget(loading_container, alignment=Qt.AlignCenter)
+        self.requests_list_layout.addStretch()
+
+    def apply_inbox_filter(self):
+        """Filter cached inbox requests by patient ID or patient name."""
+        # Prevent accidental card click right after typing/clear-button interactions.
+        self.inbox_click_guard_until = time.monotonic() + 0.30
+
+        # Clear existing items
+        self._clear_inbox_layout()
 
         requests = list(self.inbox_all_requests)
 
@@ -932,6 +1037,9 @@ class DoctorView:
     def _on_request_card_clicked(self, event, request, card_widget):
         """Open request details only for an explicit left-click release."""
         if event.button() != Qt.LeftButton:
+            event.ignore()
+            return
+        if time.monotonic() < self.inbox_click_guard_until:
             event.ignore()
             return
         event.accept()
@@ -1509,6 +1617,7 @@ class DoctorView:
 
         patient_gender = QComboBox()
         patient_gender.addItems(["Female", "Male"])
+        patient_gender.setCurrentIndex(-1)
         
         # Auto-fill patient fields when case ID is selected
         def on_patient_id_selected(selected_patient_id):
