@@ -1,5 +1,6 @@
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QTimer, Qt
-from PySide6.QtWidgets import QHBoxLayout, QMainWindow, QMessageBox, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtCore import QEasingCurve, QParallelAnimationGroup, QPoint, QPropertyAnimation, QTimer, Qt
+from PySide6.QtGui import QCursor, QGuiApplication
+from PySide6.QtWidgets import QGraphicsOpacityEffect, QHBoxLayout, QMainWindow, QMessageBox, QStackedWidget, QVBoxLayout, QWidget
 
 from api_client import api_client
 from auth_screens import (
@@ -32,14 +33,18 @@ class AuthWindow(QMainWindow):
         self.current_reset_code = None
         self.reset_attempts = 0
         self.reset_time_remaining = 0
+        self._is_page_transitioning = False
+        self._page_transition_group = None
+        self._is_centered_once = False
 
         self.init_ui()
 
     def init_ui(self):
         self.setWindowTitle("DeepNeuro - Brain Disease Diagnosis")
-        self.showMaximized()
+        self.showNormal()
 
         central_widget = QWidget()
+        central_widget.setMinimumHeight(700)
         self.setCentralWidget(central_widget)
 
         main_layout = QHBoxLayout(central_widget)
@@ -48,6 +53,23 @@ class AuthWindow(QMainWindow):
 
         main_layout.addWidget(create_branding_panel(), 0)
         main_layout.addWidget(self.create_right_panel(), 1)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._is_centered_once:
+            return
+        self._is_centered_once = True
+        QTimer.singleShot(0, self.center_window)
+        QTimer.singleShot(120, self.center_window)
+
+    def center_window(self):
+        screen = QGuiApplication.screenAt(QCursor.pos()) or self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+
+        window_rect = self.frameGeometry()
+        window_rect.moveCenter(screen.availableGeometry().center())
+        self.move(window_rect.topLeft())
 
     def create_right_panel(self):
         panel = QWidget()
@@ -85,10 +107,10 @@ class AuthWindow(QMainWindow):
         self.signin_form.password_input.textChanged.connect(self.validate_login_form)
         self.signin_form.sign_in_btn.clicked.connect(self.handle_login)
         self.signin_form.switch_to_signup_btn.clicked.connect(
-            lambda: self.stacked_widget.setCurrentIndex(self.PAGE_SIGN_UP)
+            lambda: self.switch_page(self.PAGE_SIGN_UP)
         )
         self.signin_form.forgot_btn.clicked.connect(
-            lambda: self.stacked_widget.setCurrentIndex(self.PAGE_FORGOT_PASSWORD)
+            lambda: self.switch_page(self.PAGE_FORGOT_PASSWORD)
         )
 
         self.signup_form.name_input.textChanged.connect(self.validate_signup_form)
@@ -102,7 +124,7 @@ class AuthWindow(QMainWindow):
         self.signup_form.password_input.focus_out_callback = self.on_password_focus_out
         self.signup_form.sign_up_btn.clicked.connect(self.handle_signup)
         self.signup_form.switch_to_signin_btn.clicked.connect(
-            lambda: self.stacked_widget.setCurrentIndex(self.PAGE_SIGN_IN)
+            lambda: self.switch_page(self.PAGE_SIGN_IN)
         )
         self.signup_form.terms_link.linkActivated.connect(self.show_terms_dialog)
 
@@ -129,6 +151,54 @@ class AuthWindow(QMainWindow):
         self.new_password_form.new_password_input.focus_out_callback = self.on_reset_password_focus_out
         self.new_password_form.update_password_btn.clicked.connect(self.handle_password_reset)
         self.new_password_form.back_to_signin_btn.clicked.connect(self.go_back_to_login)
+
+    def switch_page(self, target_index):
+        current_index = self.stacked_widget.currentIndex()
+        if target_index == current_index or self._is_page_transitioning:
+            return
+
+        current_widget = self.stacked_widget.currentWidget()
+        next_widget = self.stacked_widget.widget(target_index)
+        if current_widget is None or next_widget is None:
+            self.stacked_widget.setCurrentIndex(target_index)
+            return
+
+        width = self.stacked_widget.width()
+        if width <= 0:
+            self.stacked_widget.setCurrentIndex(target_index)
+            return
+
+        self._is_page_transitioning = True
+        current_widget.move(0, 0)
+        next_widget.setGeometry(0, 0, self.stacked_widget.width(), self.stacked_widget.height())
+        next_widget.move(-width, 0)
+        next_widget.show()
+        next_widget.raise_()
+
+        outgoing_anim = QPropertyAnimation(current_widget, b"pos", self)
+        outgoing_anim.setDuration(330)
+        outgoing_anim.setStartValue(QPoint(0, 0))
+        outgoing_anim.setEndValue(QPoint(width, 0))
+        outgoing_anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        incoming_anim = QPropertyAnimation(next_widget, b"pos", self)
+        incoming_anim.setDuration(330)
+        incoming_anim.setStartValue(QPoint(-width, 0))
+        incoming_anim.setEndValue(QPoint(0, 0))
+        incoming_anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        self._page_transition_group = QParallelAnimationGroup(self)
+        self._page_transition_group.addAnimation(outgoing_anim)
+        self._page_transition_group.addAnimation(incoming_anim)
+
+        def finish_transition():
+            self.stacked_widget.setCurrentIndex(target_index)
+            current_widget.move(0, 0)
+            next_widget.move(0, 0)
+            self._is_page_transitioning = False
+
+        self._page_transition_group.finished.connect(finish_transition)
+        self._page_transition_group.start()
 
     def get_input_style(self):
         return """
@@ -230,14 +300,60 @@ class AuthWindow(QMainWindow):
         )
 
     def on_password_focus_in(self):
-        self.signup_form.password_strength_bar.show()
-        self.signup_form.password_strength_label.show()
+        self.animate_strength_widgets(
+            self.signup_form.password_strength_bar,
+            self.signup_form.password_strength_label,
+            True,
+            "_signup_strength_fade_group",
+        )
         if self.signup_form.password_input.text():
             self.update_password_strength()
 
     def on_password_focus_out(self):
-        self.signup_form.password_strength_bar.hide()
-        self.signup_form.password_strength_label.hide()
+        self.animate_strength_widgets(
+            self.signup_form.password_strength_bar,
+            self.signup_form.password_strength_label,
+            False,
+            "_signup_strength_fade_group",
+        )
+
+    def get_opacity_effect(self, widget):
+        effect = widget.graphicsEffect()
+        if not isinstance(effect, QGraphicsOpacityEffect):
+            effect = QGraphicsOpacityEffect(widget)
+            effect.setOpacity(1.0 if widget.isVisible() else 0.0)
+            widget.setGraphicsEffect(effect)
+        return effect
+
+    def animate_strength_widgets(self, bar, label, show, group_attr):
+        existing_group = getattr(self, group_attr, None)
+        if existing_group and existing_group.state() == QPropertyAnimation.Running:
+            existing_group.stop()
+
+        bar_effect = self.get_opacity_effect(bar)
+        label_effect = self.get_opacity_effect(label)
+
+        if show:
+            bar.show()
+            label.show()
+
+        group = QParallelAnimationGroup(self)
+        for effect in (bar_effect, label_effect):
+            animation = QPropertyAnimation(effect, b"opacity", self)
+            animation.setDuration(220)
+            animation.setEasingCurve(QEasingCurve.InOutCubic)
+            animation.setStartValue(effect.opacity())
+            animation.setEndValue(1.0 if show else 0.0)
+            group.addAnimation(animation)
+
+        def on_finished():
+            if not show:
+                bar.hide()
+                label.hide()
+
+        group.finished.connect(on_finished)
+        setattr(self, group_attr, group)
+        group.start()
 
     def animate_progress_bar(self, end_value):
         if hasattr(self, "progress_animation") and self.progress_animation.state() == QPropertyAnimation.Running:
@@ -299,14 +415,22 @@ class AuthWindow(QMainWindow):
         self.animate_progress_bar(strength)
 
     def on_reset_password_focus_in(self):
-        self.new_password_form.password_strength_bar.show()
-        self.new_password_form.password_strength_label.show()
+        self.animate_strength_widgets(
+            self.new_password_form.password_strength_bar,
+            self.new_password_form.password_strength_label,
+            True,
+            "_reset_strength_fade_group",
+        )
         if self.new_password_form.new_password_input.text():
             self.update_reset_password_strength()
 
     def on_reset_password_focus_out(self):
-        self.new_password_form.password_strength_bar.hide()
-        self.new_password_form.password_strength_label.hide()
+        self.animate_strength_widgets(
+            self.new_password_form.password_strength_bar,
+            self.new_password_form.password_strength_label,
+            False,
+            "_reset_strength_fade_group",
+        )
 
     def animate_reset_progress_bar(self, end_value):
         if hasattr(self, "reset_progress_animation") and self.reset_progress_animation.state() == QPropertyAnimation.Running:
@@ -512,7 +636,7 @@ class AuthWindow(QMainWindow):
 
         self.verification_time_remaining = 900
         self.start_verification_timer()
-        self.stacked_widget.setCurrentIndex(self.PAGE_VERIFY_EMAIL)
+        self.switch_page(self.PAGE_VERIFY_EMAIL)
 
     def start_verification_timer(self):
         if hasattr(self, "verification_timer") and self.verification_timer.isActive():
@@ -578,7 +702,7 @@ class AuthWindow(QMainWindow):
 
         self.reset_time_remaining = 900
         self.start_reset_timer()
-        self.stacked_widget.setCurrentIndex(self.PAGE_RESET_CODE)
+        self.switch_page(self.PAGE_RESET_CODE)
 
     def start_reset_timer(self):
         if hasattr(self, "reset_timer") and self.reset_timer.isActive():
@@ -634,7 +758,7 @@ class AuthWindow(QMainWindow):
             self.new_password_form.new_password_input.clear()
             self.new_password_form.confirm_password_input.clear()
             self.new_password_form.update_password_btn.setEnabled(False)
-            self.stacked_widget.setCurrentIndex(self.PAGE_NEW_PASSWORD)
+            self.switch_page(self.PAGE_NEW_PASSWORD)
             return
 
         remaining_attempts = 5 - self.reset_attempts
@@ -681,14 +805,14 @@ class AuthWindow(QMainWindow):
 
         if not self.current_reset_code:
             self.show_message_box("Error", "Reset session expired. Please request a new code.", "warning")
-            self.stacked_widget.setCurrentIndex(self.PAGE_SIGN_IN)
+            self.switch_page(self.PAGE_SIGN_IN)
             return
 
         response, _ = api_client.reset_password(email, self.current_reset_code, password)
         if response.get("success"):
             self.show_message_box("Success", "Your password has been updated. You can now sign in.", "information")
             self.clear_reset_forms()
-            self.stacked_widget.setCurrentIndex(self.PAGE_SIGN_IN)
+            self.switch_page(self.PAGE_SIGN_IN)
             return
 
         self.show_message_box(
@@ -701,7 +825,7 @@ class AuthWindow(QMainWindow):
         if hasattr(self, "reset_timer") and self.reset_timer.isActive():
             self.reset_timer.stop()
         self.clear_reset_forms()
-        self.stacked_widget.setCurrentIndex(self.PAGE_SIGN_IN)
+        self.switch_page(self.PAGE_SIGN_IN)
 
     def clear_reset_forms(self):
         self.forgot_form.email_input.clear()
@@ -730,7 +854,7 @@ class AuthWindow(QMainWindow):
             )
             if hasattr(self, "verification_timer"):
                 self.verification_timer.stop()
-            self.stacked_widget.setCurrentIndex(self.PAGE_SIGN_UP)
+            self.switch_page(self.PAGE_SIGN_UP)
             self.clear_signup_form()
             return
 
@@ -744,7 +868,7 @@ class AuthWindow(QMainWindow):
                 "information",
             )
             self.clear_signup_form()
-            self.stacked_widget.setCurrentIndex(self.PAGE_SIGN_IN)
+            self.switch_page(self.PAGE_SIGN_IN)
             return
 
         remaining_attempts = 5 - self.verification_attempts
@@ -778,7 +902,7 @@ class AuthWindow(QMainWindow):
     def go_back_to_signup(self):
         if hasattr(self, "verification_timer") and self.verification_timer.isActive():
             self.verification_timer.stop()
-        self.stacked_widget.setCurrentIndex(self.PAGE_SIGN_UP)
+        self.switch_page(self.PAGE_SIGN_UP)
 
     def clear_signup_form(self):
         self.signup_form.name_input.clear()
