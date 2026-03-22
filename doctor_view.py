@@ -1777,7 +1777,7 @@ class DoctorView:
                 self.refresh_inbox()
                 self.parent.show_message_box(
                     "Case Sent",
-                    "The case has been sent to the selected radiologist.",
+                    response.get('message', 'The case has been sent to the selected radiologist.'),
                     "information"
                 )
             else:
