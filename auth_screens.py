@@ -104,6 +104,9 @@ class SignInForm(QWidget):
         layout.addSpacing(12)
         layout.addLayout(switch_layout)
         layout.addStretch()
+        
+        # Enable Enter key to submit form
+        self.password_input.returnPressed.connect(self.sign_in_btn.click)
 
     def _create_link_button(self, text, bold=True):
         button = QPushButton(text)
@@ -287,6 +290,9 @@ class SignUpForm(QWidget):
         layout.addSpacing(10)
         layout.addLayout(switch_layout)
         layout.addStretch()
+        
+        # Enable Enter key to submit form
+        self.confirm_password_input.returnPressed.connect(self.sign_up_btn.click)
 
 
 class EmailVerificationForm(QWidget):
@@ -484,6 +490,12 @@ class ForgotPasswordForm(QWidget):
         layout.addSpacing(10)
         layout.addLayout(back_layout)
         layout.addStretch()
+        
+        # Enable Enter key to submit form
+        self.email_input.returnPressed.connect(self.send_reset_code_btn.click)
+        
+        # Enable Enter key to submit form
+        self.email_input.returnPressed.connect(self.send_reset_code_btn.click)
 
 
 class ResetCodeForm(QWidget):
@@ -613,6 +625,9 @@ class ResetCodeForm(QWidget):
         layout.addSpacing(5)
         layout.addLayout(back_layout)
         layout.addStretch()
+        
+        # Enable Enter key to submit form
+        self.code_input.returnPressed.connect(self.verify_btn.click)
 
 
 class NewPasswordForm(QWidget):
@@ -723,6 +738,9 @@ class NewPasswordForm(QWidget):
         layout.addSpacing(10)
         layout.addLayout(back_layout)
         layout.addStretch()
+        
+        # Enable Enter key to submit form
+        self.confirm_password_input.returnPressed.connect(self.update_password_btn.click)
 
 
 def create_branding_panel():

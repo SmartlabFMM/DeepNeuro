@@ -2,7 +2,7 @@
                                QLabel, QPushButton, QFrame, QStackedWidget,
                                QSizePolicy, QMessageBox, QDialog, QFormLayout,
                                QComboBox)
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
 from api_client import api_client
 from doctor_view import DoctorView
@@ -15,6 +15,8 @@ class LandingPage(QMainWindow):
         self.user_email = user_email
         self.user_type = user_type  # 'doctor' or 'radiologist'
         self.user_name = user_name or user_email
+        self.seg_viewer = None
+        self.seg_viewer_loading = False
         
         # Initialize view based on user type
         if self.user_type == 'doctor':
@@ -173,6 +175,30 @@ class LandingPage(QMainWindow):
         title.setStyleSheet("color: #2d3748;")
 
         subtitle = QLabel("Click 'Visualize Medical Records' to open the viewer")
+        subtitle.setFont(QFont("Segoe UI", 9))
+        subtitle.setStyleSheet("color: #718096;")
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        return placeholder
+
+    def create_viewer_loading_placeholder(self):
+        placeholder = QFrame()
+        placeholder.setStyleSheet("""
+            QFrame {
+                border: 2px dashed #cbd5e0;
+                border-radius: 8px;
+                background: #f8fafc;
+            }
+        """)
+        layout = QVBoxLayout(placeholder)
+        layout.setAlignment(Qt.AlignCenter)
+
+        title = QLabel("Opening 3D viewer...")
+        title.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        title.setStyleSheet("color: #2d3748;")
+
+        subtitle = QLabel("Preparing visualization engine. Please wait a moment.")
         subtitle.setFont(QFont("Segoe UI", 9))
         subtitle.setStyleSheet("color: #718096;")
 
@@ -848,9 +874,26 @@ class LandingPage(QMainWindow):
         )
 
     def show_segmentation_viewer(self):
-        if hasattr(self, "seg_viewer") and self.seg_viewer is not None:
+        if self.seg_viewer is not None:
             self.stacked.setCurrentIndex(1)
             return
+
+        if self.seg_viewer_loading:
+            self.stacked.setCurrentIndex(1)
+            return
+
+        self.seg_viewer_loading = True
+        self.stacked.setCurrentIndex(1)
+
+        for i in reversed(range(self.viewer_host_layout.count())):
+            widget = self.viewer_host_layout.itemAt(i).widget()
+            if widget is not None:
+                widget.setParent(None)
+        self.viewer_host_layout.addWidget(self.create_viewer_loading_placeholder())
+
+        QTimer.singleShot(0, self._load_segmentation_viewer)
+
+    def _load_segmentation_viewer(self):
 
         try:
             from segmentation_viewer import SegmentationViewer
@@ -865,6 +908,7 @@ class LandingPage(QMainWindow):
             self.viewer_host_layout.addWidget(self.seg_viewer)
             self.stacked.setCurrentIndex(1)
         except ImportError as e:
+            self.seg_viewer = None
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("Missing Dependencies")
             msg_box.setText(
@@ -876,6 +920,7 @@ class LandingPage(QMainWindow):
             msg_box.setStandardButtons(QMessageBox.Ok)
             msg_box.exec()
         except Exception as e:
+            self.seg_viewer = None
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("Error")
             msg_box.setText(f"Failed to open segmentation viewer:\n\n{str(e)}")
@@ -883,6 +928,14 @@ class LandingPage(QMainWindow):
             msg_box.setStyleSheet(self.get_dialog_style())
             msg_box.setStandardButtons(QMessageBox.Ok)
             msg_box.exec()
+        finally:
+            self.seg_viewer_loading = False
+            if self.seg_viewer is None:
+                for i in reversed(range(self.viewer_host_layout.count())):
+                    widget = self.viewer_host_layout.itemAt(i).widget()
+                    if widget is not None:
+                        widget.setParent(None)
+                self.viewer_host_layout.addWidget(self.create_viewer_placeholder())
 
     def show_landing_page(self):
         self.stacked.setCurrentIndex(0)
