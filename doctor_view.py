@@ -33,6 +33,8 @@ class SendCaseDataLoader(QThread):
                         'patient_name': patient.get('patient_name', ''),
                         'patient_age': patient.get('patient_age', ''),
                         'patient_gender': patient.get('patient_sex', ''),
+                        'patient_email': patient.get('patient_email', ''),
+                        'phone_number': patient.get('phone_number', ''),
                     }
                     for patient in patients
                     if str(patient.get('patient_id', '')).strip()
@@ -49,6 +51,8 @@ class SendCaseDataLoader(QThread):
                         'patient_name': case.get('patient_name', ''),
                         'patient_age': case.get('patient_age', ''),
                         'patient_gender': case.get('patient_gender', ''),
+                        'patient_email': '',
+                        'phone_number': '',
                     }
                     for case in previous_cases
                     if str(case.get('patient_id', '')).strip()
@@ -209,8 +213,9 @@ class DoctorView:
         """Open a dialog with the doctor's patient table and quick actions."""
         dialog = QDialog(self.parent)
         dialog.setWindowTitle("Manage Patients")
-        dialog.setMinimumWidth(1050)
-        dialog.setMinimumHeight(620)
+        dialog.setMinimumWidth(1180)
+        dialog.setMinimumHeight(680)
+        dialog.resize(1180, 680)
         dialog.setStyleSheet("""
             QDialog {
                 background: #f8fafc;
@@ -282,7 +287,7 @@ class DoctorView:
         title_block.addWidget(table_subtitle)
 
         filter_input = QLineEdit()
-        filter_input.setPlaceholderText("Filter by patient ID or name")
+        filter_input.setPlaceholderText("Search by patient ID or patient name")
         filter_input.setClearButtonEnabled(True)
         filter_input.setFixedWidth(280)
         filter_input.setStyleSheet("""
@@ -329,7 +334,7 @@ class DoctorView:
         actions.addWidget(add_patient_btn)
 
         patients_table = QTableWidget()
-        patients_table.setColumnCount(9)
+        patients_table.setColumnCount(10)
         patients_table.setHorizontalHeaderLabels([
             "Patient ID",
             "Name",
@@ -339,14 +344,15 @@ class DoctorView:
             "Phone",
             "Has Conditions",
             "Conditions Notes",
-            "Created"
+            "Created",
+            "Action"
         ])
         patients_table.setEditTriggers(QTableWidget.NoEditTriggers)
         patients_table.setSelectionBehavior(QTableWidget.SelectRows)
         patients_table.setSelectionMode(QTableWidget.SingleSelection)
         patients_table.setAlternatingRowColors(True)
         patients_table.verticalHeader().setVisible(False)
-        patients_table.horizontalHeader().setStretchLastSection(True)
+        patients_table.horizontalHeader().setStretchLastSection(False)
         patients_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         patients_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         patients_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
@@ -356,6 +362,7 @@ class DoctorView:
         patients_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
         patients_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)
         patients_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeToContents)
+        patients_table.horizontalHeader().setSectionResizeMode(9, QHeaderView.ResizeToContents)
 
         content_stack = QStackedWidget()
 
@@ -396,6 +403,30 @@ class DoctorView:
 
         all_patients = []
         dialog_is_alive = {'value': True}
+
+        def on_delete_patient_click(patient_id):
+            if not patient_id:
+                return
+
+            confirmation = self.parent.show_message_box(
+                "Delete Patient",
+                f"Are you sure you want to delete patient ID: {patient_id}?",
+                "question"
+            )
+            if confirmation != QMessageBox.Yes:
+                return
+
+            response, _ = api_client.delete_patient(self.user_email, patient_id)
+            if response.get('success'):
+                self.parent.show_message_box("Success", response.get('message', 'Patient deleted successfully'), "information")
+                load_patients_async(show_error=False)
+                return
+
+            self.parent.show_message_box(
+                "Error",
+                response.get('message', 'Unable to delete patient right now.'),
+                "warning"
+            )
 
         def is_dialog_alive():
             return dialog_is_alive['value']
@@ -439,6 +470,27 @@ class DoctorView:
                     item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
                     patients_table.setItem(row_index, col_index, item)
 
+                patient_id = str(patient.get('patient_id', '')).strip()
+                delete_btn = QPushButton("Delete")
+                delete_btn.setCursor(Qt.PointingHandCursor)
+                delete_btn.setFixedSize(64, 24)
+                delete_btn.setStyleSheet("""
+                    QPushButton {
+                        background: #ef4444;
+                        color: white;
+                        border-radius: 5px;
+                        border: none;
+                        padding: 2px 8px;
+                        font-size: 10px;
+                        font-weight: 700;
+                    }
+                    QPushButton:hover {
+                        background: #dc2626;
+                    }
+                """)
+                delete_btn.clicked.connect(lambda _checked=False, pid=patient_id: on_delete_patient_click(pid))
+                patients_table.setCellWidget(row_index, 9, delete_btn)
+
         def apply_patients_filter():
             query = filter_input.text().strip().lower()
             if not query:
@@ -447,8 +499,7 @@ class DoctorView:
 
             filtered_patients = [
                 patient for patient in all_patients
-                if query in str(patient.get('patient_id', '')).lower()
-                or query in str(patient.get('patient_name', '')).lower()
+                if self._matches_patient_search(patient, query)
             ]
             populate_patients_table(filtered_patients)
 
@@ -758,6 +809,12 @@ class DoctorView:
         
         self.requests_list_layout.addStretch()
 
+    def _matches_patient_search(self, patient, search_query):
+        """Return True when query matches patient ID or patient name."""
+        patient_id = str(patient.get('patient_id', '')).lower()
+        patient_name = str(patient.get('patient_name', patient.get('name', ''))).lower()
+        return search_query in patient_id or search_query in patient_name
+
     def _matches_request_search(self, request, search_query):
         """Return True when query matches patient ID or patient name."""
         patient_id = str(request.get('patient_id', '')).lower()
@@ -1007,7 +1064,7 @@ class DoctorView:
         
         # Priority badge
         priority = request['priority']
-        priority_text = f"🔴 Urgent" if priority == "Urgent" else f"🟢 Routine"
+        priority_text = f" 🔴  Urgent" if priority == "Urgent" else f" 🟢  Routine"
         priority_label = QLabel(priority_text)
         priority_label.setFont(QFont("Segoe UI", 8, QFont.Bold))
         priority_label.setStyleSheet("color: #374151;")
@@ -1052,6 +1109,8 @@ class DoctorView:
             api_client.mark_read_doctor(request['id'])
             request['is_read'] = 1
             self._mark_request_read_in_cache(request['id'])
+            if self.requests_list_layout is not None:
+                self.apply_inbox_filter()
             if card_widget is not None:
                 card_widget.setStyleSheet(self._request_card_style(False))
         
@@ -1093,6 +1152,8 @@ class DoctorView:
             ("Patient Information", [
                 (f"Patient Name", request.get('patient_name', 'N/A')),
                 (f"Patient ID", request.get('patient_id', 'N/A')),
+                (f"Email", request.get('patient_email', 'N/A')),
+                (f"Phone", request.get('phone_number', 'N/A')),
             ]),
             ("Medical Information", [
                 (f"Diagnosis Type", request.get('diagnosis_type', 'N/A')),
@@ -1599,7 +1660,7 @@ class DoctorView:
         self.cases_dict = {}
 
         patient_id = QLineEdit()
-        patient_id.setPlaceholderText("Type to search saved patients/history or enter patient ID")
+        patient_id.setPlaceholderText("ID")
 
         # Add autocomplete for patient IDs (loaded in background)
         patient_id_model = QStringListModel([])
@@ -1614,17 +1675,31 @@ class DoctorView:
         patient_age = QLineEdit()
         patient_age.setPlaceholderText("Age")
         patient_age.setValidator(QIntValidator(1, 120, self.parent))
+        patient_age.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         patient_gender = QComboBox()
+        patient_gender.setEditable(True)
+        patient_gender.setInsertPolicy(QComboBox.NoInsert)
+        patient_gender.lineEdit().setReadOnly(True)
+        patient_gender.lineEdit().setPlaceholderText("Gender")
         patient_gender.addItems(["Female", "Male"])
         patient_gender.setCurrentIndex(-1)
-        
+        patient_gender.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        patient_email = QLineEdit()
+        patient_email.setPlaceholderText("Email")
+
+        phone_number = QLineEdit()
+        phone_number.setPlaceholderText("Phone number")
+        phone_number.setMinimumWidth(180)
         # Auto-fill patient fields when case ID is selected
         def on_patient_id_selected(selected_patient_id):
             if selected_patient_id in self.cases_dict:
                 case_data = self.cases_dict[selected_patient_id]
                 patient_name.setText(case_data['patient_name'])
                 patient_age.setText(str(case_data['patient_age']) if case_data['patient_age'] else "")
+                patient_email.setText(str(case_data.get('patient_email', '') or ''))
+                phone_number.setText(str(case_data.get('phone_number', '') or ''))
                 
                 # Set gender
                 gender_index = patient_gender.findText(case_data['patient_gender'])
@@ -1635,6 +1710,10 @@ class DoctorView:
         patient_id_completer.activated.connect(on_patient_id_selected)
 
         diagnosis_type = QComboBox()
+        diagnosis_type.setEditable(True)
+        diagnosis_type.setInsertPolicy(QComboBox.NoInsert)
+        diagnosis_type.lineEdit().setReadOnly(True)
+        diagnosis_type.lineEdit().setPlaceholderText("Diagnosis Type")
         diagnosis_type.addItems([
             "Glioma Tumor",
             "Hemorrhagic Stroke",
@@ -1643,6 +1722,10 @@ class DoctorView:
         diagnosis_type.setCurrentIndex(-1)
 
         priority = QComboBox()
+        priority.setEditable(True)
+        priority.setInsertPolicy(QComboBox.NoInsert)
+        priority.lineEdit().setReadOnly(True)
+        priority.lineEdit().setPlaceholderText("Priority")
         priority.addItems(["Routine", "Urgent"])
         priority.setCurrentIndex(-1)
 
@@ -1664,31 +1747,57 @@ class DoctorView:
         description.setPlaceholderText("Add clinical notes, symptoms, or special instructions")
         description.setMinimumHeight(90)
 
-        patient_id_label = QLabel("Patient ID")
-        patient_id_label.setObjectName("FieldLabel")
-        patient_name_label = QLabel("Patient Name")
-        patient_name_label.setObjectName("FieldLabel")
-        age_label = QLabel("Age")
-        age_label.setObjectName("FieldLabel")
-        gender_label = QLabel("Gender")
-        gender_label.setObjectName("FieldLabel")
-        diagnosis_label = QLabel("Diagnosis Type")
-        diagnosis_label.setObjectName("FieldLabel")
-        priority_label = QLabel("Priority")
-        priority_label.setObjectName("FieldLabel")
-        radiologist_label = QLabel("Radiologist")
-        radiologist_label.setObjectName("FieldLabel")
-        description_label = QLabel("Description")
-        description_label.setObjectName("FieldLabel")
+        patient_section_label = QLabel("Patient Informations")
+        patient_section_label.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        patient_section_label.setStyleSheet("color: #1f2937; margin-top: 6px; margin-bottom: 1px;")
+        patient_section_label.setMaximumWidth(180)
+        patient_section_label.setMinimumHeight(40)
 
-        form.addRow(patient_id_label, patient_id)
-        form.addRow(patient_name_label, patient_name)
-        form.addRow(age_label, patient_age)
-        form.addRow(gender_label, patient_gender)
-        form.addRow(diagnosis_label, diagnosis_type)
-        form.addRow(priority_label, priority)
-        form.addRow(radiologist_label, radiologist_combo)
-        form.addRow(description_label, description)
+        case_section_label = QLabel("Case Request")
+        case_section_label.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        case_section_label.setStyleSheet("color: #1f2937; margin-top: 6px; margin-bottom: 1px;")
+        case_section_label.setMaximumWidth(120)
+        case_section_label.setMinimumHeight(40)
+
+
+        patient_info_row = QWidget()
+        patient_info_layout = QHBoxLayout(patient_info_row)
+        patient_info_layout.setContentsMargins(0, 0, 0, 0)
+        patient_info_layout.setSpacing(8)
+        patient_id.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        patient_name.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        patient_info_layout.addWidget(patient_id, 1)
+        patient_info_layout.addWidget(patient_name, 1)
+
+        personal_row = QWidget()
+        personal_layout = QHBoxLayout(personal_row)
+        personal_layout.setContentsMargins(0, 0, 0, 0)
+        personal_layout.setSpacing(8)
+        personal_layout.addWidget(patient_age, 1)
+        personal_layout.addWidget(patient_gender, 1)
+
+        contact_row = QWidget()
+        contact_layout = QHBoxLayout(contact_row)
+        contact_layout.setContentsMargins(0, 0, 0, 0)
+        contact_layout.setSpacing(8)
+        contact_layout.addWidget(patient_email)
+        contact_layout.addWidget(phone_number)
+
+        case_main_row = QWidget()
+        case_main_layout = QHBoxLayout(case_main_row)
+        case_main_layout.setContentsMargins(0, 0, 0, 0)
+        case_main_layout.setSpacing(8)
+        case_main_layout.addWidget(diagnosis_type)
+        case_main_layout.addWidget(priority)
+
+        form.addRow(patient_section_label)
+        form.addRow(patient_info_row)
+        form.addRow(personal_row)
+        form.addRow(contact_row)
+        form.addRow(case_section_label)
+        form.addRow(case_main_row)
+        form.addRow(radiologist_combo)
+        form.addRow(description)
 
         actions = QHBoxLayout()
         actions.addStretch()
@@ -1739,6 +1848,23 @@ class DoctorView:
             if age_value < 1 or age_value > 120:
                 self.parent.show_message_box("Missing Information", "Age must be between 1 and 120.", "warning")
                 return
+
+            missing_optional_fields = []
+            if not patient_email.text().strip():
+                missing_optional_fields.append("Email")
+            if not phone_number.text().strip():
+                missing_optional_fields.append("Phone Number")
+
+            if missing_optional_fields:
+                missing_text = ", ".join(missing_optional_fields)
+                continue_reply = self.parent.show_message_box(
+                    "Optional Fields Empty",
+                    f"Some optional fields are empty: {missing_text}.\n\nDo you want to continue sending?",
+                    "question"
+                )
+                if continue_reply != QMessageBox.Yes:
+                    return
+
             if not radiologist_combo.currentText().strip():
                 self.parent.show_message_box("Missing Information", "Radiologist field is required.", "warning")
                 return
@@ -1764,6 +1890,8 @@ class DoctorView:
                 patient_id=patient_id.text().strip(),
                 patient_age=age_value,
                 patient_gender=patient_gender.currentText(),
+                patient_email=patient_email.text().strip(),
+                phone_number=phone_number.text().strip(),
                 diagnosis_type=diagnosis_type.currentText(),
                 scan_date=datetime.now().strftime("%Y-%m-%d"),
                 priority=priority.currentText(),

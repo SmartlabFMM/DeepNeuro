@@ -586,11 +586,13 @@ class RadiologistView:
         
         # Priority badge
         priority = request['priority']
-        priority_text = f"🔴 Urgent" if priority == "Urgent" else f"🟢 Routine"
+        priority_text = "● Urgent" if priority == "Urgent" else "● Routine"
         priority_label = QLabel(priority_text)
         priority_label.setFont(QFont("Segoe UI", 8, QFont.Bold))
-        priority_label.setStyleSheet("color: #374151;")
-        priority_label.setFixedWidth(120)
+        priority_color = "#dc2626" if priority == "Urgent" else "#16a34a"
+        priority_label.setStyleSheet(f"color: {priority_color};")
+        priority_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        priority_label.setMinimumWidth(128)
         
         # Date received
         formatted_date = self._format_request_datetime(request.get('created_at', 'N/A'))
@@ -631,6 +633,8 @@ class RadiologistView:
             api_client.mark_read_radiologist(request['id'])
             request['is_read'] = 1
             self._mark_request_read_in_cache(request['id'])
+            if self.radiologist_requests_layout is not None:
+                self.apply_radiologist_filter()
             if card_widget is not None:
                 card_widget.setStyleSheet(self._request_card_style(False))
         
@@ -672,6 +676,8 @@ class RadiologistView:
             ("Patient Information", [
                 (f"Patient Name", request.get('patient_name', 'N/A')),
                 (f"Patient ID", request.get('patient_id', 'N/A')),
+                (f"Email", request.get('patient_email', 'N/A')),
+                (f"Phone", request.get('phone_number', 'N/A')),
             ]),
             ("Medical Information", [
                 (f"Diagnosis Type", request.get('diagnosis_type', 'N/A')),

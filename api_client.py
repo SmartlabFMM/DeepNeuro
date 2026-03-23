@@ -85,8 +85,9 @@ class APIClient:
     
     # Diagnosis endpoints
     def submit_diagnosis_request(self, doctor_email, doctor_name, patient_name,
-                                patient_id, patient_age, patient_gender, diagnosis_type,
-                                scan_date, priority, radiologist_email, description):
+                                patient_id, patient_age, patient_gender, patient_email,
+                                phone_number, diagnosis_type, scan_date, priority,
+                                radiologist_email, description):
         """Submit a diagnosis request"""
         data = {
             'doctor_email': doctor_email,
@@ -95,6 +96,8 @@ class APIClient:
             'patient_id': patient_id,
             'patient_age': patient_age,
             'patient_gender': patient_gender,
+            'patient_email': patient_email,
+            'phone_number': phone_number,
             'diagnosis_type': diagnosis_type,
             'scan_date': scan_date,
             'priority': priority,
@@ -138,6 +141,14 @@ class APIClient:
     def get_doctor_patients(self, doctor_email):
         """Get all patients for a doctor"""
         return self._make_request('GET', f'/api/diagnosis/patients/doctor/{doctor_email}')
+
+    def delete_patient(self, doctor_email, patient_id):
+        """Delete a patient profile for a doctor"""
+        data = {
+            'doctor_email': doctor_email,
+            'patient_id': patient_id,
+        }
+        return self._make_request('DELETE', '/api/diagnosis/patients/delete', json=data)
     
     def mark_read_doctor(self, request_id):
         """Mark request as read by doctor"""
