@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushB
                                QFrame, QSizePolicy, QMessageBox, QDialog, QFormLayout,
                                QLineEdit, QComboBox, QSpinBox, QScrollArea, QPlainTextEdit,
                                QApplication, QCompleter, QTableWidget, QTableWidgetItem, QHeaderView,
-                               QStackedWidget)
+                               QStackedWidget, QFileDialog)
 from PySide6.QtCore import Qt, QThread, Signal, QStringListModel, QTimer
 from PySide6.QtGui import QFont, QIntValidator, QPainter, QColor
 from api_client import api_client
@@ -1102,6 +1102,38 @@ class DoctorView:
         event.accept()
         self.show_request_details(request, card_widget)
     
+    def _download_attached_file(self, request_id, file_type, file_index):
+        """Download an attached file from a request."""
+        save_path, _ = QFileDialog.getSaveFileName(
+            self.parent,
+            f"Save {file_type} File",
+            "",
+            "All files (*.*)"
+        )
+        
+        if not save_path:
+            return
+        
+        response, status_code = api_client.download_attached_file(
+            request_id=request_id,
+            file_type=file_type,
+            user_email=self.user_email,
+            save_path=save_path
+        )
+        
+        if response.get('success'):
+            self.parent.show_message_box(
+                "Download Complete",
+                f"File saved successfully to:\n{save_path}",
+                "information"
+            )
+        else:
+            self.parent.show_message_box(
+                "Download Failed",
+                response.get('message', 'Failed to download file'),
+                "warning"
+            )
+    
     def show_request_details(self, request, card_widget=None):
         """Show detailed view of a request in a dialog"""
         # Mark as read immediately when dialog opens
@@ -1219,6 +1251,93 @@ class DoctorView:
                 }
             """)
             content_layout.addWidget(desc_text)
+
+        if request.get('uploaded_test_file') or request.get('segmentation_file'):
+            files_label = QLabel("Attached Files")
+            files_font = QFont("Segoe UI", 11, QFont.Bold)
+            files_label.setFont(files_font)
+            files_label.setStyleSheet("color: #1f2937; margin-top: 10px;")
+            content_layout.addWidget(files_label)
+
+            uploaded_tests = [
+                item.strip()
+                for item in str(request.get('uploaded_test_file', '')).split('|')
+                if item.strip()
+            ]
+
+            if uploaded_tests:
+                tests_title = QLabel("Uploaded Test Files")
+                tests_title.setStyleSheet("color: #6b7280; font-weight: 700;")
+                content_layout.addWidget(tests_title)
+                for idx, file_path in enumerate(uploaded_tests):
+                    file_row = QHBoxLayout()
+                    file_label = QLabel(f"📄 {file_path}")
+                    file_label.setStyleSheet("color: #111827;")
+                    file_label.setWordWrap(True)
+                    file_row.addWidget(file_label)
+                    
+                    if request.get('id'):
+                        download_btn = QPushButton("Download")
+                        download_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
+                        download_btn.setCursor(Qt.PointingHandCursor)
+                        download_btn.setStyleSheet("""
+                            QPushButton {
+                                background: #e0f2fe;
+                                color: #0369a1;
+                                border: none;
+                                border-radius: 4px;
+                                padding: 4px 8px;
+                            }
+                            QPushButton:hover {
+                                background: #bae6fd;
+                            }
+                        """)
+                        download_btn.setFixedWidth(80)
+                        download_btn.clicked.connect(
+                            lambda checked, req_id=request.get('id'), f_type='test', f_idx=idx: 
+                            self._download_attached_file(req_id, f_type, f_idx)
+                        )
+                        file_row.addWidget(download_btn)
+                    
+                    file_row.addStretch()
+                    content_layout.addLayout(file_row)
+
+            if request.get('segmentation_file'):
+                seg_title = QLabel("Segmentation File")
+                seg_title.setStyleSheet("color: #6b7280; font-weight: 700; margin-top: 8px;")
+                content_layout.addWidget(seg_title)
+                
+                seg_row = QHBoxLayout()
+                seg_label = QLabel(f"📄 {request.get('segmentation_file', 'N/A')}")
+                seg_label.setStyleSheet("color: #111827;")
+                seg_label.setWordWrap(True)
+                seg_row.addWidget(seg_label)
+                
+                if request.get('id'):
+                    download_btn = QPushButton("Download")
+                    download_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
+                    download_btn.setCursor(Qt.PointingHandCursor)
+                    download_btn.setStyleSheet("""
+                        QPushButton {
+                            background: #f0e7fe;
+                            color: #6b21a8;
+                            border: none;
+                            border-radius: 4px;
+                            padding: 4px 8px;
+                        }
+                        QPushButton:hover {
+                            background: #e9d5ff;
+                        }
+                    """)
+                    download_btn.setFixedWidth(80)
+                    download_btn.clicked.connect(
+                        lambda checked, req_id=request.get('id'): 
+                        self._download_attached_file(req_id, 'segmentation', 0)
+                    )
+                    seg_row.addWidget(download_btn)
+                
+                seg_row.addStretch()
+                content_layout.addLayout(seg_row)
         
         content_layout.addStretch()
         scroll.setWidget(content_widget)

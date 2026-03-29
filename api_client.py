@@ -157,6 +157,46 @@ class APIClient:
     def mark_read_radiologist(self, request_id):
         """Mark request as read by radiologist"""
         return self._make_request('PUT', f'/api/diagnosis/mark-read/radiologist/{request_id}')
+
+    def complete_case_request(self, request_id, radiologist_email, diagnosis_type,
+                              uploaded_test_file, segmentation_file):
+        """Attach radiology files to a request and mark it completed."""
+        data = {
+            'radiologist_email': radiologist_email,
+            'diagnosis_type': diagnosis_type,
+            'uploaded_test_file': uploaded_test_file,
+            'segmentation_file': segmentation_file,
+        }
+        return self._make_request('PUT', f'/api/diagnosis/complete/{request_id}', json=data)
+    
+    def download_attached_file(self, request_id, file_type, user_email, save_path=None):
+        """Download a test or segmentation file from a request."""
+        try:
+            url = f"{self.base_url}/api/diagnosis/download/{request_id}/{file_type}/{user_email}"
+            response = requests.get(url, timeout=self.timeout, stream=True)
+            
+            if response.status_code == 200:
+                # If save_path provided, save file there
+                if save_path:
+                    with open(save_path, 'wb') as f:
+                        f.write(response.content)
+                    return {'success': True, 'message': f'File saved to {save_path}', 'file_path': save_path}, 200
+                else:
+                    # Return file content and filename
+                    filename = response.headers.get('content-disposition', '').split('filename=')[-1].strip('"')
+                    return {'success': True, 'data': response.content, 'filename': filename}, 200
+            else:
+                try:
+                    error_data = response.json()
+                    return error_data, response.status_code
+                except:
+                    return {'success': False, 'message': f'Download failed: {response.reason}'}, response.status_code
+        except requests.exceptions.ConnectionError:
+            return {'success': False, 'message': 'Failed to connect to server'}, 500
+        except requests.exceptions.Timeout:
+            return {'success': False, 'message': 'Request timeout'}, 500
+        except Exception as e:
+            return {'success': False, 'message': f'Error: {str(e)}'}, 500
     
     # Utility methods
     @staticmethod

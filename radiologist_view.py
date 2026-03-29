@@ -1,12 +1,14 @@
 """Radiologist-specific landing page view"""
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                                QFrame, QSizePolicy, QMessageBox, QDialog,
-                               QApplication, QScrollArea, QPlainTextEdit, QLineEdit)
+                               QApplication, QScrollArea, QPlainTextEdit, QLineEdit,
+                               QFileDialog, QComboBox, QStackedWidget)
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from PySide6.QtGui import QFont, QPainter, QColor
 from api_client import api_client
 from datetime import datetime
 import math
+import os
 import time
 
 
@@ -96,6 +98,108 @@ class RadiologistView:
         self.radiologist_refresh_token = 0
         self.radiologist_click_guard_until = 0.0
         self.expanded_patient_groups = set()
+
+    def _update_completed_request_in_cache(self, request_id, diagnosis_type, test_file, segmentation_file):
+        """Update local request cache after radiologist completes a case."""
+        for request in self.all_received_requests:
+            if request.get('id') == request_id:
+                request['diagnosis_type'] = diagnosis_type
+                request['uploaded_test_file'] = test_file
+                request['segmentation_file'] = segmentation_file
+                request['status'] = 'Completed'
+                request['completed_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                break
+
+    def _split_uploaded_test_files(self, test_file_value):
+        """Decode a stored test-file string into a list of file paths."""
+        if not test_file_value:
+            return []
+        if isinstance(test_file_value, list):
+            return [str(path).strip() for path in test_file_value if str(path).strip()]
+        return [path.strip() for path in str(test_file_value).split('|') if path.strip()]
+
+    def _download_attached_file(self, request_id, file_type):
+        """Download an attached file from a request."""
+        save_path, _ = QFileDialog.getSaveFileName(
+            self.parent,
+            f"Save {file_type} File",
+            "",
+            "All files (*.*)"
+        )
+        
+        if not save_path:
+            return
+        
+        response, status_code = api_client.download_attached_file(
+            request_id=request_id,
+            file_type=file_type,
+            user_email=self.user_email,
+            save_path=save_path
+        )
+        
+        if response.get('success'):
+            self.parent.show_message_box(
+                "Download Complete",
+                f"File saved successfully to:\n{save_path}",
+                "information"
+            )
+        else:
+            self.parent.show_message_box(
+                "Download Failed",
+                response.get('message', 'Failed to download file'),
+                "warning"
+            )
+
+
+    def _create_file_chip(self, file_path, request_id=None, file_type=None):
+        """Create a simple file-logo style chip for uploaded files with optional download button."""
+        chip = QFrame()
+        chip.setStyleSheet("""
+            QFrame {
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+            }
+        """)
+        row = QHBoxLayout(chip)
+        row.setContentsMargins(10, 7, 10, 7)
+        row.setSpacing(8)
+
+        icon_label = QLabel("📄")
+        icon_label.setFont(QFont("Segoe UI", 11))
+        name_label = QLabel(os.path.basename(file_path) or file_path)
+        name_label.setStyleSheet("color: #0f172a; font-weight: 600;")
+        name_label.setToolTip(file_path)
+
+        row.addWidget(icon_label)
+        row.addWidget(name_label)
+        row.addStretch()
+        
+        # Add download button if request_id and file_type provided
+        if request_id and file_type:
+            download_btn = QPushButton("Download")
+            download_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
+            download_btn.setCursor(Qt.PointingHandCursor)
+            download_btn.setStyleSheet("""
+                QPushButton {
+                    background: #e0f2fe;
+                    color: #0369a1;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 4px 8px;
+                }
+                QPushButton:hover {
+                    background: #bae6fd;
+                }
+            """)
+            download_btn.setFixedWidth(80)
+            download_btn.clicked.connect(
+                lambda checked, req_id=request_id, f_type=file_type: 
+                self._download_attached_file(req_id, f_type)
+            )
+            row.addWidget(download_btn)
+        
+        return chip
         
     def create_buttons_container(self):
         """Create container with diagnosis buttons for radiologists"""
@@ -586,13 +690,11 @@ class RadiologistView:
         
         # Priority badge
         priority = request['priority']
-        priority_text = "● Urgent" if priority == "Urgent" else "● Routine"
+        priority_text = f" 🔴  Urgent" if priority == "Urgent" else f" 🟢  Routine"
         priority_label = QLabel(priority_text)
         priority_label.setFont(QFont("Segoe UI", 8, QFont.Bold))
-        priority_color = "#dc2626" if priority == "Urgent" else "#16a34a"
-        priority_label.setStyleSheet(f"color: {priority_color};")
-        priority_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        priority_label.setMinimumWidth(128)
+        priority_label.setStyleSheet("color: #374151;")
+        priority_label.setFixedWidth(120)
         
         # Date received
         formatted_date = self._format_request_datetime(request.get('created_at', 'N/A'))
@@ -641,7 +743,7 @@ class RadiologistView:
         dialog = QDialog(self.parent)
         dialog.setWindowTitle(f"Request Details - {request['patient_id']}")
         dialog.setMinimumWidth(600)
-        dialog.setMinimumHeight(500)
+        dialog.setMinimumHeight(560)
         dialog.setStyleSheet("""
             QDialog {
                 background: #f3f4f6;
@@ -651,83 +753,80 @@ class RadiologistView:
             }
         """)
         
-        layout = QVBoxLayout(dialog)
-        layout.setSpacing(12)
-        layout.setContentsMargins(20, 20, 20, 20)
-        
-        # Title with patient ID
+        root_layout = QVBoxLayout(dialog)
+        root_layout.setSpacing(12)
+        root_layout.setContentsMargins(20, 20, 20, 20)
+
         title = QLabel(f"Patient ID: {request['patient_id']}")
-        title_font = QFont("Segoe UI", 14, QFont.Bold)
-        title.setFont(title_font)
+        title.setFont(QFont("Segoe UI", 14, QFont.Bold))
         title.setStyleSheet("color: #1f2937;")
-        layout.addWidget(title)
-        
-        # Create scrollable content area
+        root_layout.addWidget(title)
+
+        content_stack = QStackedWidget()
+        root_layout.addWidget(content_stack)
+
+        # Details page
+        details_page = QWidget()
+        details_layout = QVBoxLayout(details_page)
+        details_layout.setContentsMargins(0, 0, 0, 0)
+        details_layout.setSpacing(12)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet("border: none; background: transparent;")
-        
+
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
         content_layout.setSpacing(12)
-        
-        # Details in sections
+
         details = [
             ("Patient Information", [
-                (f"Patient Name", request.get('patient_name', 'N/A')),
-                (f"Patient ID", request.get('patient_id', 'N/A')),
-                (f"Email", request.get('patient_email', 'N/A')),
-                (f"Phone", request.get('phone_number', 'N/A')),
+                ("Patient Name", request.get('patient_name', 'N/A')),
+                ("Patient ID", request.get('patient_id', 'N/A')),
+                ("Email", request.get('patient_email', 'N/A')),
+                ("Phone", request.get('phone_number', 'N/A')),
             ]),
             ("Medical Information", [
-                (f"Diagnosis Type", request.get('diagnosis_type', 'N/A')),
+                ("Diagnosis Type", request.get('diagnosis_type', 'N/A')),
             ]),
             ("Case Information", [
-                (f"Patient ID", request['patient_id']),
-                (f"From Doctor", request.get('doctor_name', 'N/A')),
-                (f"Priority", request['priority']),
-                (f"Status", request['status']),
-                (f"Scan Date", request.get('scan_date', 'N/A')),
-                (f"Received", request.get('created_at', 'N/A')),
+                ("Patient ID", request['patient_id']),
+                ("From Doctor", request.get('doctor_name', 'N/A')),
+                ("Priority", request['priority']),
+                ("Status", request['status']),
+                ("Scan Date", request.get('scan_date', 'N/A')),
+                ("Received", request.get('created_at', 'N/A')),
             ]),
         ]
-        
+
         for section_title, section_items in details:
-            # Section header
             section_label = QLabel(section_title)
-            section_font = QFont("Segoe UI", 11, QFont.Bold)
-            section_label.setFont(section_font)
+            section_label.setFont(QFont("Segoe UI", 11, QFont.Bold))
             section_label.setStyleSheet("color: #1f2937; margin-top: 10px;")
             content_layout.addWidget(section_label)
-            
-            # Section items
+
             for label_text, value_text in section_items:
                 item_layout = QHBoxLayout()
                 label = QLabel(label_text)
-                label_font = QFont("Segoe UI", 9)
-                label.setFont(label_font)
+                label.setFont(QFont("Segoe UI", 9))
                 label.setStyleSheet("color: #6b7280; font-weight: bold;")
                 label.setMinimumWidth(120)
-                
+
                 value = QLabel(str(value_text))
-                value_font = QFont("Segoe UI", 9)
-                value.setFont(value_font)
+                value.setFont(QFont("Segoe UI", 9))
                 value.setStyleSheet("color: #111827;")
-                
+
                 item_layout.addWidget(label)
                 item_layout.addWidget(value)
                 item_layout.addStretch()
-                
                 content_layout.addLayout(item_layout)
-        
-        # Description section
+
         if request.get('description'):
             desc_label = QLabel("Description")
-            desc_font = QFont("Segoe UI", 11, QFont.Bold)
-            desc_label.setFont(desc_font)
+            desc_label.setFont(QFont("Segoe UI", 11, QFont.Bold))
             desc_label.setStyleSheet("color: #1f2937; margin-top: 10px;")
             content_layout.addWidget(desc_label)
-            
+
             desc_text = QPlainTextEdit()
             desc_text.setPlainText(request['description'])
             desc_text.setReadOnly(True)
@@ -742,12 +841,228 @@ class RadiologistView:
                 }
             """)
             content_layout.addWidget(desc_text)
-        
+
+        existing_tests = self._split_uploaded_test_files(request.get('uploaded_test_file'))
+        if existing_tests or request.get('segmentation_file'):
+            files_label = QLabel("Attached Files")
+            files_label.setFont(QFont("Segoe UI", 11, QFont.Bold))
+            files_label.setStyleSheet("color: #1f2937; margin-top: 10px;")
+            content_layout.addWidget(files_label)
+
+            if existing_tests:
+                tests_title = QLabel("Uploaded Test Files")
+                tests_title.setStyleSheet("color: #6b7280; font-weight: 700;")
+                content_layout.addWidget(tests_title)
+                for file_path in existing_tests:
+                    content_layout.addWidget(self._create_file_chip(file_path, request.get('id'), 'test'))
+
+            if request.get('segmentation_file'):
+                seg_title = QLabel("Segmentation File")
+                seg_title.setStyleSheet("color: #6b7280; font-weight: 700; margin-top: 8px;")
+                content_layout.addWidget(seg_title)
+                content_layout.addWidget(self._create_file_chip(str(request.get('segmentation_file')), request.get('id'), 'segmentation'))
+
         content_layout.addStretch()
         scroll.setWidget(content_widget)
-        layout.addWidget(scroll)
-        
-        # Close button
+        details_layout.addWidget(scroll)
+        content_stack.addWidget(details_page)
+
+        # Model usage page (same window)
+        model_page = QWidget()
+        model_layout = QVBoxLayout(model_page)
+        model_layout.setContentsMargins(0, 0, 0, 0)
+        model_layout.setSpacing(10)
+
+        header = QLabel("Model Usage")
+        header.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        header.setStyleSheet("color: #1f2937;")
+
+        helper = QLabel("Upload test files, generate/select a segmentation file, then send all files in this same request.")
+        helper.setStyleSheet("color: #6b7280;")
+        helper.setWordWrap(True)
+
+        diagnosis_type = QComboBox()
+        diagnosis_type.addItems(["Glioma Tumor", "Hemorrhagic Stroke", "Ischemic Stroke"])
+        diagnosis_type.setCurrentIndex(-1)
+        diagnosis_type.setStyleSheet("""
+            QComboBox {
+                background: white;
+                border: 1px solid #d1d5db;
+                border-radius: 7px;
+                padding: 7px 10px;
+            }
+        """)
+
+        selected_test_files = []
+
+        files_section = QFrame()
+        files_section.setStyleSheet("""
+            QFrame {
+                background: white;
+                border: 1px solid #e5e7eb;
+                border-radius: 8px;
+            }
+        """)
+        files_section_layout = QVBoxLayout(files_section)
+        files_section_layout.setContentsMargins(10, 10, 10, 10)
+        files_section_layout.setSpacing(8)
+
+        files_section_title = QLabel("Uploaded Test Files")
+        files_section_title.setStyleSheet("color: #374151; font-weight: 700;")
+
+        files_list_widget = QWidget()
+        files_list_layout = QVBoxLayout(files_list_widget)
+        files_list_layout.setContentsMargins(0, 0, 0, 0)
+        files_list_layout.setSpacing(6)
+
+        empty_files_label = QLabel("No test files uploaded yet")
+        empty_files_label.setStyleSheet("color: #9ca3af; font-style: italic;")
+
+        def refresh_uploaded_files_view():
+            while files_list_layout.count():
+                item = files_list_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+
+            if not selected_test_files:
+                files_list_layout.addWidget(empty_files_label)
+                return
+
+            for file_path in selected_test_files:
+                files_list_layout.addWidget(self._create_file_chip(file_path))
+
+        upload_tests_btn = QPushButton("Upload Test Files")
+        upload_tests_btn.setCursor(Qt.PointingHandCursor)
+        upload_tests_btn.setStyleSheet("""
+            QPushButton {
+                background: #dbeafe;
+                color: #1e40af;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 14px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background: #bfdbfe;
+            }
+        """)
+
+        segmentation_file_input = QLineEdit()
+        segmentation_file_input.setReadOnly(True)
+        segmentation_file_input.setPlaceholderText("Segmentation file generated by model")
+
+        generate_seg_btn = QPushButton("Generate / Select Segmentation File")
+        generate_seg_btn.setCursor(Qt.PointingHandCursor)
+        generate_seg_btn.setStyleSheet("""
+            QPushButton {
+                background: #ede9fe;
+                color: #5b21b6;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 14px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background: #ddd6fe;
+            }
+        """)
+
+        def pick_test_files():
+            file_paths, _ = QFileDialog.getOpenFileNames(
+                dialog,
+                "Upload Test Files",
+                "",
+                "All files (*.*)"
+            )
+            if file_paths:
+                selected_test_files.clear()
+                selected_test_files.extend(file_paths)
+                refresh_uploaded_files_view()
+
+        def pick_generated_segmentation_file():
+            file_path, _ = QFileDialog.getOpenFileName(
+                dialog,
+                "Select Generated Segmentation File",
+                "",
+                "All files (*.*)"
+            )
+            if file_path:
+                segmentation_file_input.setText(file_path)
+
+        upload_tests_btn.clicked.connect(pick_test_files)
+        generate_seg_btn.clicked.connect(pick_generated_segmentation_file)
+
+        refresh_uploaded_files_view()
+
+        files_section_layout.addWidget(files_section_title)
+        files_section_layout.addWidget(files_list_widget)
+
+        model_layout.addWidget(header)
+        model_layout.addWidget(helper)
+        model_layout.addWidget(QLabel("Diagnosis Type"))
+        model_layout.addWidget(diagnosis_type)
+        model_layout.addWidget(upload_tests_btn)
+        model_layout.addWidget(files_section)
+        model_layout.addWidget(QLabel("Segmentation Output"))
+        model_layout.addWidget(segmentation_file_input)
+        model_layout.addWidget(generate_seg_btn)
+        model_layout.addStretch()
+
+        content_stack.addWidget(model_page)
+        content_stack.setCurrentWidget(details_page)
+
+        action_layout = QHBoxLayout()
+
+        back_btn = QPushButton("Back to Details")
+        back_btn.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        back_btn.setCursor(Qt.PointingHandCursor)
+        back_btn.setStyleSheet("""
+            QPushButton {
+                background: #e0e7ff;
+                color: #3730a3;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 14px;
+            }
+            QPushButton:hover {
+                background: #c7d2fe;
+            }
+        """)
+        back_btn.setVisible(False)
+
+        diagnose_btn = QPushButton("Diagnose & Upload Tests")
+        diagnose_btn.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        diagnose_btn.setCursor(Qt.PointingHandCursor)
+        diagnose_btn.setStyleSheet("""
+            QPushButton {
+                background: #8b5cf6;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background: #7c3aed;
+            }
+        """)
+
+        complete_btn = QPushButton("Complete & Send to Doctor")
+        complete_btn.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        complete_btn.setCursor(Qt.PointingHandCursor)
+        complete_btn.setStyleSheet("""
+            QPushButton {
+                background: #0ea5e9;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background: #0284c7;
+            }
+        """)
+        complete_btn.setVisible(False)
+
         close_btn = QPushButton("Close")
         close_btn.setFont(QFont("Segoe UI", 9, QFont.Bold))
         close_btn.setStyleSheet("""
@@ -763,6 +1078,65 @@ class RadiologistView:
             }
         """)
         close_btn.clicked.connect(dialog.accept)
-        layout.addWidget(close_btn)
+
+        def open_model_usage_page():
+            content_stack.setCurrentWidget(model_page)
+            diagnose_btn.setVisible(False)
+            back_btn.setVisible(True)
+            complete_btn.setVisible(True)
+
+        def open_details_page():
+            content_stack.setCurrentWidget(details_page)
+            diagnose_btn.setVisible(True)
+            back_btn.setVisible(False)
+            complete_btn.setVisible(False)
+
+        def complete_and_send():
+            if diagnosis_type.currentIndex() < 0:
+                self.parent.show_message_box("Missing Information", "Please choose diagnosis type.", "warning")
+                return
+            if not selected_test_files:
+                self.parent.show_message_box("Missing Information", "Please upload test files first.", "warning")
+                return
+
+            segmentation_file = segmentation_file_input.text().strip()
+
+            test_files_value = ' | '.join(selected_test_files)
+            response, _ = api_client.complete_case_request(
+                request_id=request.get('id'),
+                radiologist_email=self.user_email,
+                diagnosis_type=diagnosis_type.currentText(),
+                uploaded_test_file=test_files_value,
+                segmentation_file=segmentation_file,
+            )
+
+            if response.get('success'):
+                self._update_completed_request_in_cache(
+                    request_id=request.get('id'),
+                    diagnosis_type=diagnosis_type.currentText(),
+                    test_file=test_files_value,
+                    segmentation_file=segmentation_file,
+                )
+                request['diagnosis_type'] = diagnosis_type.currentText()
+                request['uploaded_test_file'] = test_files_value
+                request['segmentation_file'] = segmentation_file
+                request['status'] = 'Completed'
+                self.apply_radiologist_filter()
+                self.parent.show_message_box("Success", response.get('message', 'Case completed successfully.'), "information")
+                dialog.accept()
+                return
+
+            self.parent.show_message_box("Error", response.get('message', 'Failed to complete request.'), "warning")
+
+        diagnose_btn.clicked.connect(open_model_usage_page)
+        back_btn.clicked.connect(open_details_page)
+        complete_btn.clicked.connect(complete_and_send)
+
+        action_layout.addWidget(back_btn)
+        action_layout.addStretch()
+        action_layout.addWidget(diagnose_btn)
+        action_layout.addWidget(complete_btn)
+        action_layout.addWidget(close_btn)
+        root_layout.addLayout(action_layout)
         
         dialog.exec()

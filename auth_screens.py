@@ -1,5 +1,5 @@
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+import os
 
 
 class PasswordLineEdit(QLineEdit):
@@ -749,8 +750,9 @@ def create_branding_panel():
     panel.setStyleSheet(
         """
         #leftPanel {
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                stop:0 #667eea, stop:1 #764ba2);
+            background: qlineargradient(x1:1, y1:0, x2:1, y2:1,
+                stop:0 #010719, stop:0.25 #2d1b3d, stop:0.5 #5d3a85, 
+                stop:0.75 #6b4a95, stop:1 #764ba2);
         }
         """
     )
@@ -758,6 +760,16 @@ def create_branding_panel():
     layout = QVBoxLayout(panel)
     layout.setAlignment(Qt.AlignCenter)
     layout.setContentsMargins(25, 25, 25, 25)
+
+    # Add logo image
+    logo_label = QLabel()
+    logo_path = os.path.join(os.path.dirname(__file__), "DeepNeuro logo.png")
+    if os.path.exists(logo_path):
+        pixmap = QPixmap(logo_path)
+        scaled_pixmap = pixmap.scaledToWidth(250, Qt.SmoothTransformation)
+        logo_label.setPixmap(scaled_pixmap)
+        logo_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(logo_label)
 
     title = QLabel("DeepNeuro")
     title.setFont(QFont("Segoe UI", 20, QFont.Bold))
