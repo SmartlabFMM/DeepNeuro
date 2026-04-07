@@ -118,7 +118,32 @@ class RadiologistView:
             return [str(path).strip() for path in test_file_value if str(path).strip()]
         return [path.strip() for path in str(test_file_value).split('|') if path.strip()]
 
-    def _download_attached_file(self, request_id, file_type):
+    def _upload_case_file(self, file_path):
+        """Upload a local case file to backend storage and return the stored file ID."""
+        response, _ = api_client.upload_file(file_path, self.user_email)
+        if response.get('success'):
+            file_record = response.get('file') or {}
+            return str(file_record.get('id', '')).strip()
+        return ""
+
+    def _store_case_attachments(self, test_files, segmentation_file):
+        """Upload case attachments and return backend file IDs."""
+        uploaded_test_ids = []
+        for file_path in test_files:
+            file_id = self._upload_case_file(file_path)
+            if not file_id:
+                return [], ""
+            uploaded_test_ids.append(file_id)
+
+        segmentation_file_id = ""
+        if segmentation_file:
+            segmentation_file_id = self._upload_case_file(segmentation_file)
+            if not segmentation_file_id:
+                return [], ""
+
+        return uploaded_test_ids, segmentation_file_id
+
+    def _download_attached_file(self, request_id, file_type, file_index=0):
         """Download an attached file from a request."""
         save_path, _ = QFileDialog.getSaveFileName(
             self.parent,
@@ -133,6 +158,7 @@ class RadiologistView:
         response, status_code = api_client.download_attached_file(
             request_id=request_id,
             file_type=file_type,
+            file_index=file_index,
             user_email=self.user_email,
             save_path=save_path
         )
@@ -147,6 +173,33 @@ class RadiologistView:
             self.parent.show_message_box(
                 "Download Failed",
                 response.get('message', 'Failed to download file'),
+                "warning"
+            )
+
+    def _open_attached_file(self, request_id, file_type, file_index=0):
+        """Open an attached file by downloading it to a temp location first."""
+        import tempfile
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        temp_dir = os.path.join(tempfile.gettempdir(), 'DeepNeuro', 'case-files')
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_path = os.path.join(temp_dir, f"{request_id}_{file_type}_{file_index}")
+
+        response, status_code = api_client.download_attached_file(
+            request_id=request_id,
+            file_type=file_type,
+            file_index=file_index,
+            user_email=self.user_email,
+            save_path=temp_path
+        )
+
+        if response.get('success'):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(temp_path))
+        else:
+            self.parent.show_message_box(
+                "Open Failed",
+                response.get('message', 'Failed to open file'),
                 "warning"
             )
 
@@ -1101,13 +1154,18 @@ class RadiologistView:
 
             segmentation_file = segmentation_file_input.text().strip()
 
-            test_files_value = ' | '.join(selected_test_files)
+            test_file_ids, segmentation_file_id = self._store_case_attachments(selected_test_files, segmentation_file)
+            if not test_file_ids:
+                self.parent.show_message_box("Upload Failed", "One or more files could not be uploaded to the backend.", "warning")
+                return
+
+            test_files_value = ' | '.join(test_file_ids)
             response, _ = api_client.complete_case_request(
                 request_id=request.get('id'),
                 radiologist_email=self.user_email,
                 diagnosis_type=diagnosis_type.currentText(),
                 uploaded_test_file=test_files_value,
-                segmentation_file=segmentation_file,
+                segmentation_file=segmentation_file_id,
             )
 
             if response.get('success'):
@@ -1115,11 +1173,11 @@ class RadiologistView:
                     request_id=request.get('id'),
                     diagnosis_type=diagnosis_type.currentText(),
                     test_file=test_files_value,
-                    segmentation_file=segmentation_file,
+                    segmentation_file=segmentation_file_id,
                 )
                 request['diagnosis_type'] = diagnosis_type.currentText()
                 request['uploaded_test_file'] = test_files_value
-                request['segmentation_file'] = segmentation_file
+                request['segmentation_file'] = segmentation_file_id
                 request['status'] = 'Completed'
                 self.apply_radiologist_filter()
                 self.parent.show_message_box("Success", response.get('message', 'Case completed successfully.'), "information")

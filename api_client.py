@@ -169,11 +169,16 @@ class APIClient:
         }
         return self._make_request('PUT', f'/api/diagnosis/complete/{request_id}', json=data)
     
-    def download_attached_file(self, request_id, file_type, user_email, save_path=None):
+    def download_attached_file(self, request_id, file_type, user_email, file_index=0, save_path=None):
         """Download a test or segmentation file from a request."""
         try:
             url = f"{self.base_url}/api/diagnosis/download/{request_id}/{file_type}/{user_email}"
-            response = requests.get(url, timeout=self.timeout, stream=True)
+            response = requests.get(
+                url,
+                params={'file_index': file_index},
+                timeout=self.timeout,
+                stream=True,
+            )
             
             if response.status_code == 200:
                 # If save_path provided, save file there
@@ -191,6 +196,80 @@ class APIClient:
                     return error_data, response.status_code
                 except:
                     return {'success': False, 'message': f'Download failed: {response.reason}'}, response.status_code
+        except requests.exceptions.ConnectionError:
+            return {'success': False, 'message': 'Failed to connect to server'}, 500
+        except requests.exceptions.Timeout:
+            return {'success': False, 'message': 'Request timeout'}, 500
+        except Exception as e:
+            return {'success': False, 'message': f'Error: {str(e)}'}, 500
+
+    def upload_file(self, file_path, uploaded_by_email, related_entity_id=None):
+        """Upload a file to the backend file storage API."""
+        try:
+            if not file_path or not os.path.exists(file_path):
+                return {'success': False, 'message': 'File not found'}, 400
+
+            with open(file_path, 'rb') as file_handle:
+                files = {
+                    'file': (os.path.basename(file_path), file_handle)
+                }
+                data = {
+                    'uploaded_by_email': uploaded_by_email,
+                    'related_entity_id': related_entity_id or '',
+                }
+                response = requests.post(
+                    f"{self.base_url}/api/files/upload",
+                    data=data,
+                    files=files,
+                    timeout=self.timeout,
+                )
+
+            try:
+                return response.json(), response.status_code
+            except Exception:
+                return {'success': False, 'message': f'Upload failed: {response.reason}'}, response.status_code
+        except requests.exceptions.ConnectionError:
+            return {'success': False, 'message': 'Failed to connect to server'}, 500
+        except requests.exceptions.Timeout:
+            return {'success': False, 'message': 'Request timeout'}, 500
+        except Exception as e:
+            return {'success': False, 'message': f'Error: {str(e)}'}, 500
+
+    def get_uploaded_files(self, uploaded_by_email=None, related_entity_id=None):
+        """Fetch uploaded file metadata from the backend API."""
+        params = {}
+        if uploaded_by_email:
+            params['uploaded_by_email'] = uploaded_by_email
+        if related_entity_id:
+            params['related_entity_id'] = related_entity_id
+        return self._make_request('GET', '/api/files', params=params)
+
+    def download_uploaded_file(self, file_id, user_email, save_path=None):
+        """Download a stored file by ID."""
+        try:
+            url = f"{self.base_url}/api/files/{file_id}/download"
+            response = requests.get(
+                url,
+                params={'user_email': user_email},
+                timeout=self.timeout,
+                stream=True,
+            )
+
+            if response.status_code == 200:
+                filename = response.headers.get('content-disposition', '').split('filename=')[-1].strip('"')
+                if save_path:
+                    with open(save_path, 'wb') as file_handle:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                file_handle.write(chunk)
+                    return {'success': True, 'message': f'File saved to {save_path}', 'file_path': save_path, 'filename': filename}, 200
+
+                return {'success': True, 'data': response.content, 'filename': filename}, 200
+
+            try:
+                return response.json(), response.status_code
+            except Exception:
+                return {'success': False, 'message': f'Download failed: {response.reason}'}, response.status_code
         except requests.exceptions.ConnectionError:
             return {'success': False, 'message': 'Failed to connect to server'}, 500
         except requests.exceptions.Timeout:

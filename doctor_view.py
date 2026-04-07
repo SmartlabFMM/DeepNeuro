@@ -5,9 +5,11 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushB
                                QApplication, QCompleter, QTableWidget, QTableWidgetItem, QHeaderView,
                                QStackedWidget, QFileDialog)
 from PySide6.QtCore import Qt, QThread, Signal, QStringListModel, QTimer
-from PySide6.QtGui import QFont, QIntValidator, QPainter, QColor
+from PySide6.QtGui import QFont, QIntValidator, QPainter, QColor, QDesktopServices
+from PySide6.QtCore import QUrl
 from api_client import api_client
 from datetime import datetime
+import os
 import math
 import time
 
@@ -1118,6 +1120,7 @@ class DoctorView:
             request_id=request_id,
             file_type=file_type,
             user_email=self.user_email,
+            file_index=file_index,
             save_path=save_path
         )
         
@@ -1131,6 +1134,31 @@ class DoctorView:
             self.parent.show_message_box(
                 "Download Failed",
                 response.get('message', 'Failed to download file'),
+                "warning"
+            )
+
+    def _open_attached_file(self, request_id, file_type, file_index):
+        """Open an attached file through a temporary local download."""
+        import tempfile
+
+        temp_dir = os.path.join(tempfile.gettempdir(), 'DeepNeuro', 'doctor-files')
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_path = os.path.join(temp_dir, f"{request_id}_{file_type}_{file_index}")
+
+        response, status_code = api_client.download_attached_file(
+            request_id=request_id,
+            file_type=file_type,
+            user_email=self.user_email,
+            file_index=file_index,
+            save_path=temp_path
+        )
+
+        if response.get('success'):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(temp_path))
+        else:
+            self.parent.show_message_box(
+                "Open Failed",
+                response.get('message', 'Failed to open file'),
                 "warning"
             )
     
@@ -1259,11 +1287,7 @@ class DoctorView:
             files_label.setStyleSheet("color: #1f2937; margin-top: 10px;")
             content_layout.addWidget(files_label)
 
-            uploaded_tests = [
-                item.strip()
-                for item in str(request.get('uploaded_test_file', '')).split('|')
-                if item.strip()
-            ]
+            uploaded_tests = [item.strip() for item in str(request.get('uploaded_test_file', '')).split('|') if item.strip()]
 
             if uploaded_tests:
                 tests_title = QLabel("Uploaded Test Files")
@@ -1271,12 +1295,34 @@ class DoctorView:
                 content_layout.addWidget(tests_title)
                 for idx, file_path in enumerate(uploaded_tests):
                     file_row = QHBoxLayout()
-                    file_label = QLabel(f"📄 {file_path}")
+                    file_label_text = f"📄 Test File {idx + 1}" if file_path.isdigit() else f"📄 {os.path.basename(file_path)}"
+                    file_label = QLabel(file_label_text)
                     file_label.setStyleSheet("color: #111827;")
                     file_label.setWordWrap(True)
                     file_row.addWidget(file_label)
                     
                     if request.get('id'):
+                        open_btn = QPushButton("Open")
+                        open_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
+                        open_btn.setCursor(Qt.PointingHandCursor)
+                        open_btn.setStyleSheet("""
+                            QPushButton {
+                                background: #dcfce7;
+                                color: #166534;
+                                border: none;
+                                border-radius: 4px;
+                                padding: 4px 8px;
+                            }
+                            QPushButton:hover {
+                                background: #bbf7d0;
+                            }
+                        """)
+                        open_btn.setFixedWidth(70)
+                        open_btn.clicked.connect(
+                            lambda checked, req_id=request.get('id'), f_type='test', f_idx=idx:
+                            self._open_attached_file(req_id, f_type, f_idx)
+                        )
+
                         download_btn = QPushButton("Download")
                         download_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
                         download_btn.setCursor(Qt.PointingHandCursor)
@@ -1297,6 +1343,7 @@ class DoctorView:
                             lambda checked, req_id=request.get('id'), f_type='test', f_idx=idx: 
                             self._download_attached_file(req_id, f_type, f_idx)
                         )
+                        file_row.addWidget(open_btn)
                         file_row.addWidget(download_btn)
                     
                     file_row.addStretch()
@@ -1308,12 +1355,34 @@ class DoctorView:
                 content_layout.addWidget(seg_title)
                 
                 seg_row = QHBoxLayout()
-                seg_label = QLabel(f"📄 {request.get('segmentation_file', 'N/A')}")
+                seg_value = str(request.get('segmentation_file', 'N/A'))
+                seg_label = QLabel("📄 Segmentation File" if seg_value.isdigit() else f"📄 {os.path.basename(seg_value)}")
                 seg_label.setStyleSheet("color: #111827;")
                 seg_label.setWordWrap(True)
                 seg_row.addWidget(seg_label)
                 
                 if request.get('id'):
+                    open_btn = QPushButton("Open")
+                    open_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
+                    open_btn.setCursor(Qt.PointingHandCursor)
+                    open_btn.setStyleSheet("""
+                        QPushButton {
+                            background: #dcfce7;
+                            color: #166534;
+                            border: none;
+                            border-radius: 4px;
+                            padding: 4px 8px;
+                        }
+                        QPushButton:hover {
+                            background: #bbf7d0;
+                        }
+                    """)
+                    open_btn.setFixedWidth(70)
+                    open_btn.clicked.connect(
+                        lambda checked, req_id=request.get('id'):
+                        self._open_attached_file(req_id, 'segmentation', 0)
+                    )
+
                     download_btn = QPushButton("Download")
                     download_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
                     download_btn.setCursor(Qt.PointingHandCursor)
@@ -1334,6 +1403,7 @@ class DoctorView:
                         lambda checked, req_id=request.get('id'): 
                         self._download_attached_file(req_id, 'segmentation', 0)
                     )
+                    seg_row.addWidget(open_btn)
                     seg_row.addWidget(download_btn)
                 
                 seg_row.addStretch()

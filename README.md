@@ -48,6 +48,11 @@ The Frontend provides a rich graphical user interface for medical professionals 
 - Real-time 3D rendering with PyVista/VTK
 - File import from local filesystem
 
+### 📁 File Library
+- Upload files to the Flask backend from the desktop app
+- View files backed by SQLite metadata
+- Open files locally or download them again from the server
+
 ## Prerequisites
 
 - Python 3.8 or higher

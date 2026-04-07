@@ -44,7 +44,8 @@ class AuthWindow(QMainWindow):
         self.showNormal()
 
         central_widget = QWidget()
-        central_widget.setMinimumHeight(700)
+        central_widget.setMinimumHeight(730)
+        central_widget.setMinimumWidth(680)
         self.setCentralWidget(central_widget)
 
         main_layout = QHBoxLayout(central_widget)
@@ -845,19 +846,6 @@ class AuthWindow(QMainWindow):
             self.show_message_box("Error", "Please enter the verification code.", "warning")
             return
 
-        self.verification_attempts += 1
-        if self.verification_attempts > 5:
-            self.show_message_box(
-                "Error",
-                "Too many incorrect attempts.\nPlease request a new verification code.",
-                "warning",
-            )
-            if hasattr(self, "verification_timer"):
-                self.verification_timer.stop()
-            self.switch_page(self.PAGE_SIGN_UP)
-            self.clear_signup_form()
-            return
-
         response, status_code = api_client.verify_email(email, code)
         if response.get("success") and status_code == 200:
             if hasattr(self, "verification_timer") and self.verification_timer.isActive():
@@ -869,6 +857,19 @@ class AuthWindow(QMainWindow):
             )
             self.clear_signup_form()
             self.switch_page(self.PAGE_SIGN_IN)
+            return
+
+        self.verification_attempts += 1
+        if self.verification_attempts > 5:
+            self.show_message_box(
+                "Error",
+                "Too many incorrect attempts.\nPlease request a new verification code.",
+                "warning",
+            )
+            if hasattr(self, "verification_timer"):
+                self.verification_timer.stop()
+            self.switch_page(self.PAGE_SIGN_UP)
+            self.clear_signup_form()
             return
 
         remaining_attempts = 5 - self.verification_attempts
