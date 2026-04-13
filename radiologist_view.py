@@ -2,10 +2,20 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                                QFrame, QSizePolicy, QMessageBox, QDialog,
                                QApplication, QScrollArea, QPlainTextEdit, QLineEdit,
-                               QFileDialog, QComboBox, QStackedWidget)
-from PySide6.QtCore import Qt, QTimer, QThread, Signal
+                               QFileDialog, QComboBox, QStackedWidget, QDateEdit,
+                               QGridLayout)
+from PySide6.QtCore import Qt, QTimer, QThread, Signal, QDate
 from PySide6.QtGui import QFont, QPainter, QColor
 from api_client import api_client
+from shared_request_ui import (
+    REQUEST_DETAILS_DIALOG_STYLESHEET,
+    DATE_FILTER_CLEAR_BUTTON_STYLESHEET,
+    clean_value,
+    create_date_filter_label,
+    create_standard_date_filter_edit,
+    make_badge,
+    make_section_card,
+)
 from datetime import datetime
 import math
 import os
@@ -92,6 +102,9 @@ class RadiologistView:
         self.radiologist_requests_widget = None
         self.radiologist_requests_layout = None
         self.requests_search_input = None
+        self.requests_date_from = None
+        self.requests_date_to = None
+        self.requests_date_filter_active = False
         self.all_received_requests = []
         self.radiologist_loading_spinner = None
         self.radiologist_requests_loader = None
@@ -99,13 +112,23 @@ class RadiologistView:
         self.radiologist_click_guard_until = 0.0
         self.expanded_patient_groups = set()
 
-    def _update_completed_request_in_cache(self, request_id, diagnosis_type, test_file, segmentation_file):
+    def _update_completed_request_in_cache(
+        self,
+        request_id,
+        diagnosis_type,
+        test_file,
+        segmentation_file,
+        test_file_names=None,
+        segmentation_file_name="",
+    ):
         """Update local request cache after radiologist completes a case."""
         for request in self.all_received_requests:
             if request.get('id') == request_id:
                 request['diagnosis_type'] = diagnosis_type
                 request['uploaded_test_file'] = test_file
+                request['uploaded_test_file_names'] = list(test_file_names or [])
                 request['segmentation_file'] = segmentation_file
+                request['segmentation_file_name'] = segmentation_file_name or ""
                 request['status'] = 'Completed'
                 request['completed_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 break
@@ -204,7 +227,7 @@ class RadiologistView:
             )
 
 
-    def _create_file_chip(self, file_path, request_id=None, file_type=None):
+    def _create_file_chip(self, file_path, request_id=None, file_type=None, file_index=0, display_name=None):
         """Create a simple file-logo style chip for uploaded files with optional download button."""
         chip = QFrame()
         chip.setStyleSheet("""
@@ -220,9 +243,11 @@ class RadiologistView:
 
         icon_label = QLabel("📄")
         icon_label.setFont(QFont("Segoe UI", 11))
-        name_label = QLabel(os.path.basename(file_path) or file_path)
+        resolved_name = (str(display_name).strip() if display_name else "") or (os.path.basename(file_path) or file_path)
+        name_label = QLabel(resolved_name)
         name_label.setStyleSheet("color: #0f172a; font-weight: 600;")
-        name_label.setToolTip(file_path)
+        name_label.setToolTip(resolved_name)
+        name_label.setWordWrap(True)
 
         row.addWidget(icon_label)
         row.addWidget(name_label)
@@ -247,8 +272,8 @@ class RadiologistView:
             """)
             download_btn.setFixedWidth(80)
             download_btn.clicked.connect(
-                lambda checked, req_id=request_id, f_type=file_type: 
-                self._download_attached_file(req_id, f_type)
+                lambda checked, req_id=request_id, f_type=file_type, f_idx=file_index:
+                self._download_attached_file(req_id, f_type, f_idx)
             )
             row.addWidget(download_btn)
         
@@ -316,6 +341,18 @@ class RadiologistView:
             }
         """)
         self.requests_search_input.textChanged.connect(self.apply_radiologist_filter)
+
+        self.requests_date_from = create_standard_date_filter_edit()
+        self.requests_date_to = create_standard_date_filter_edit()
+
+        self.requests_date_from.dateChanged.connect(self._activate_radiologist_date_filter)
+        self.requests_date_to.dateChanged.connect(self._activate_radiologist_date_filter)
+
+        clear_date_btn = QPushButton("Clear")
+        clear_date_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
+        clear_date_btn.setCursor(Qt.PointingHandCursor)
+        clear_date_btn.setStyleSheet(DATE_FILTER_CLEAR_BUTTON_STYLESHEET)
+        clear_date_btn.clicked.connect(self.clear_radiologist_date_filter)
         
         refresh_btn = QPushButton("🔄 Refresh")
         refresh_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
@@ -338,6 +375,15 @@ class RadiologistView:
         header_layout.addWidget(subtitle)
         header_layout.addStretch()
         header_layout.addWidget(self.requests_search_input)
+
+        from_label = create_date_filter_label("From")
+        to_label = create_date_filter_label("To")
+
+        header_layout.addWidget(from_label)
+        header_layout.addWidget(self.requests_date_from)
+        header_layout.addWidget(to_label)
+        header_layout.addWidget(self.requests_date_to)
+        header_layout.addWidget(clear_date_btn)
         header_layout.addWidget(refresh_btn)
         
         layout.addLayout(header_layout)
@@ -453,7 +499,7 @@ class RadiologistView:
         self.radiologist_requests_layout.addStretch()
 
     def apply_radiologist_filter(self):
-        """Filter cached received requests by patient ID or patient name."""
+        """Filter cached received requests by patient ID, patient name, or created date."""
         # Prevent accidental card click right after typing/clear-button interactions.
         self.radiologist_click_guard_until = time.monotonic() + 0.30
 
@@ -470,6 +516,13 @@ class RadiologistView:
             requests = [
                 request for request in requests
                 if self._matches_request_search(request, search_query)
+            ]
+
+        selected_from, selected_to = self._get_radiologist_filter_range()
+        if selected_from is not None or selected_to is not None:
+            requests = [
+                request for request in requests
+                if self._matches_request_date_range(request, selected_from, selected_to)
             ]
         
         if not requests:
@@ -499,6 +552,69 @@ class RadiologistView:
         patient_id = str(request.get('patient_id', '')).lower()
         patient_name = str(request.get('patient_name', '')).lower()
         return search_query in patient_id or search_query in patient_name
+
+    def _activate_radiologist_date_filter(self):
+        """Enable the radiologist date filter after the user selects a date."""
+        self.requests_date_filter_active = True
+        self.apply_radiologist_filter()
+
+    def clear_radiologist_date_filter(self):
+        """Show received requests from all dates."""
+        self.requests_date_filter_active = False
+        if self.requests_date_from is not None and self.requests_date_to is not None:
+            today = QDate.currentDate()
+            self.requests_date_from.blockSignals(True)
+            self.requests_date_to.blockSignals(True)
+            self.requests_date_from.setDate(today)
+            self.requests_date_to.setDate(today)
+            self.requests_date_from.blockSignals(False)
+            self.requests_date_to.blockSignals(False)
+        self.apply_radiologist_filter()
+
+    def _get_radiologist_filter_range(self):
+        if not self.requests_date_filter_active or self.requests_date_from is None or self.requests_date_to is None:
+            return None, None
+
+        from_qdate = self.requests_date_from.date()
+        to_qdate = self.requests_date_to.date()
+        from_date = datetime(from_qdate.year(), from_qdate.month(), from_qdate.day()).date()
+        to_date = datetime(to_qdate.year(), to_qdate.month(), to_qdate.day()).date()
+
+        if from_date <= to_date:
+            return from_date, to_date
+        return to_date, from_date
+
+    def _request_created_date(self, request):
+        """Return the request created date when it can be parsed."""
+        created_at = request.get('created_at', '')
+        if not created_at:
+            return None
+
+        created_at_str = str(created_at).strip()
+        try:
+            normalized = created_at_str.replace('Z', '+00:00')
+            return datetime.fromisoformat(normalized).date()
+        except Exception:
+            pass
+
+        if len(created_at_str) >= 10 and created_at_str[4] == '-' and created_at_str[7] == '-':
+            try:
+                return datetime.strptime(created_at_str[:10], '%Y-%m-%d').date()
+            except Exception:
+                return None
+
+        return None
+
+    def _matches_request_date_range(self, request, selected_from, selected_to):
+        """Return True when request created date falls within from/to date range."""
+        request_date = self._request_created_date(request)
+        if request_date is None:
+            return False
+        if selected_from is not None and request_date < selected_from:
+            return False
+        if selected_to is not None and request_date > selected_to:
+            return False
+        return True
 
     def _mark_request_read_in_cache(self, request_id):
         """Keep local cache in sync after marking a request as read."""
@@ -779,7 +895,7 @@ class RadiologistView:
             event.ignore()
             return
         event.accept()
-        self.show_radiologist_request_details(request, card_widget)
+        QTimer.singleShot(0, lambda req=request, req_card=card_widget: self.show_radiologist_request_details(req, req_card))
     
     def show_radiologist_request_details(self, request, card_widget=None):
         """Show detailed view of a request received by radiologist"""
@@ -795,25 +911,40 @@ class RadiologistView:
         
         dialog = QDialog(self.parent)
         dialog.setWindowTitle(f"Request Details - {request['patient_id']}")
-        dialog.setMinimumWidth(600)
-        dialog.setMinimumHeight(560)
-        dialog.setStyleSheet("""
-            QDialog {
-                background: #f3f4f6;
-            }
-            QLabel {
-                color: #374151;
-            }
-        """)
+        dialog.setMinimumWidth(530)
+        dialog.setMinimumHeight(700)
+        dialog.resize(530, 700)
+        dialog.setStyleSheet(REQUEST_DETAILS_DIALOG_STYLESHEET)
         
         root_layout = QVBoxLayout(dialog)
-        root_layout.setSpacing(12)
-        root_layout.setContentsMargins(20, 20, 20, 20)
+        root_layout.setSpacing(14)
+        root_layout.setContentsMargins(18, 18, 18, 18)
 
-        title = QLabel(f"Patient ID: {request['patient_id']}")
-        title.setFont(QFont("Segoe UI", 14, QFont.Bold))
-        title.setStyleSheet("color: #1f2937;")
-        root_layout.addWidget(title)
+        header_card = QFrame()
+        header_card.setObjectName("HeaderCard")
+        header_layout = QVBoxLayout(header_card)
+        header_layout.setContentsMargins(18, 16, 18, 16)
+        header_layout.setSpacing(10)
+
+        title = QLabel(f"Case Information • {clean_value(request.get('patient_id'))}")
+        title.setFont(QFont("Segoe UI", 16, QFont.Bold))
+        title.setStyleSheet("color: #111827;")
+        header_layout.addWidget(title)
+
+        subtitle = QLabel(f"{clean_value(request.get('patient_name'))}  •  {clean_value(request.get('diagnosis_type'))}")
+        subtitle.setObjectName("MutedText")
+        subtitle.setFont(QFont("Segoe UI", 10))
+        header_layout.addWidget(subtitle)
+
+        badge_row = QHBoxLayout()
+        badge_row.setSpacing(8)
+        badge_row.addWidget(make_badge(f"Status: {request.get('status', 'N/A')}", "#ecfeff", "#155e75", "#a5f3fc"))
+        badge_row.addWidget(make_badge(f"Priority: {request.get('priority', 'N/A')}", "#fff7ed", "#9a3412", "#fed7aa"))
+        badge_row.addWidget(make_badge(f"Scan Date: {request.get('scan_date', 'N/A')}", "#eef2ff", "#3730a3", "#c7d2fe"))
+        badge_row.addStretch()
+        header_layout.addLayout(badge_row)
+
+        root_layout.addWidget(header_card)
 
         content_stack = QStackedWidget()
         root_layout.addWidget(content_stack)
@@ -831,89 +962,133 @@ class RadiologistView:
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
         content_layout.setSpacing(12)
+        content_layout.setContentsMargins(2, 2, 2, 2)
 
-        details = [
-            ("Patient Information", [
-                ("Patient Name", request.get('patient_name', 'N/A')),
-                ("Patient ID", request.get('patient_id', 'N/A')),
-                ("Email", request.get('patient_email', 'N/A')),
-                ("Phone", request.get('phone_number', 'N/A')),
-            ]),
-            ("Medical Information", [
-                ("Diagnosis Type", request.get('diagnosis_type', 'N/A')),
-            ]),
-            ("Case Information", [
-                ("Patient ID", request['patient_id']),
-                ("From Doctor", request.get('doctor_name', 'N/A')),
-                ("Priority", request['priority']),
-                ("Status", request['status']),
-                ("Scan Date", request.get('scan_date', 'N/A')),
-                ("Received", request.get('created_at', 'N/A')),
-            ]),
+        patient_rows = [
+            ("Patient Name", QLabel(clean_value(request.get('patient_name')))),
+            ("Patient ID", QLabel(clean_value(request.get('patient_id')))),
+            ("Email", QLabel(clean_value(request.get('patient_email')))),
+            ("Phone", QLabel(clean_value(request.get('phone_number')))),
+        ]
+        medical_rows = [
+            ("Diagnosis Type", QLabel(clean_value(request.get('diagnosis_type')))),
         ]
 
-        for section_title, section_items in details:
-            section_label = QLabel(section_title)
-            section_label.setFont(QFont("Segoe UI", 11, QFont.Bold))
-            section_label.setStyleSheet("color: #1f2937; margin-top: 10px;")
-            content_layout.addWidget(section_label)
+        priority_label = make_badge(request.get('priority', 'N/A'), "#fff7ed", "#9a3412", "#fed7aa")
+        status_label = make_badge(request.get('status', 'N/A'), "#ecfeff", "#155e75", "#a5f3fc")
+        scan_date_label = QLabel(clean_value(request.get('scan_date')))
+        scan_date_label.setStyleSheet("color: #111827; padding-top: 4px;")
+        received_label = QLabel(clean_value(self._format_request_datetime(request.get('created_at', 'N/A'))))
+        received_label.setStyleSheet("color: #111827; padding-top: 4px;")
+        from_doctor_label = QLabel(clean_value(request.get('doctor_name')))
+        from_doctor_label.setStyleSheet("color: #111827; padding-top: 4px;")
 
-            for label_text, value_text in section_items:
-                item_layout = QHBoxLayout()
-                label = QLabel(label_text)
-                label.setFont(QFont("Segoe UI", 9))
-                label.setStyleSheet("color: #6b7280; font-weight: bold;")
-                label.setMinimumWidth(120)
+        case_rows = [
+            ("From Doctor", from_doctor_label),
+            ("Priority", priority_label),
+            ("Status", status_label),
+            ("Scan Date", scan_date_label),
+            ("Received", received_label),
+        ]
 
-                value = QLabel(str(value_text))
-                value.setFont(QFont("Segoe UI", 9))
-                value.setStyleSheet("color: #111827;")
-
-                item_layout.addWidget(label)
-                item_layout.addWidget(value)
-                item_layout.addStretch()
-                content_layout.addLayout(item_layout)
+        content_layout.addWidget(make_section_card("Patient Information", patient_rows))
+        content_layout.addWidget(make_section_card("Medical Information", medical_rows))
+        content_layout.addWidget(make_section_card("Case Information", case_rows))
 
         if request.get('description'):
+            desc_card = QFrame()
+            desc_card.setObjectName("SectionCard")
+            desc_layout = QVBoxLayout(desc_card)
+            desc_layout.setContentsMargins(16, 14, 16, 14)
+            desc_layout.setSpacing(10)
+
             desc_label = QLabel("Description")
+            desc_label.setObjectName("SectionTitle")
             desc_label.setFont(QFont("Segoe UI", 11, QFont.Bold))
-            desc_label.setStyleSheet("color: #1f2937; margin-top: 10px;")
-            content_layout.addWidget(desc_label)
+            desc_layout.addWidget(desc_label)
 
             desc_text = QPlainTextEdit()
             desc_text.setPlainText(request['description'])
             desc_text.setReadOnly(True)
-            desc_text.setMinimumHeight(100)
+            desc_text.setMinimumHeight(120)
             desc_text.setStyleSheet("""
                 QPlainTextEdit {
-                    background: white;
+                    background: #f9fafb;
                     border: 1px solid #e5e7eb;
-                    border-radius: 6px;
-                    padding: 8px;
+                    border-radius: 10px;
+                    padding: 10px;
                     color: #111827;
                 }
             """)
-            content_layout.addWidget(desc_text)
+            desc_layout.addWidget(desc_text)
+            content_layout.addWidget(desc_card)
 
         existing_tests = self._split_uploaded_test_files(request.get('uploaded_test_file'))
         if existing_tests or request.get('segmentation_file'):
+            files_card = QFrame()
+            files_card.setObjectName("SectionCard")
+            files_layout = QVBoxLayout(files_card)
+            files_layout.setContentsMargins(16, 14, 16, 14)
+            files_layout.setSpacing(10)
+
             files_label = QLabel("Attached Files")
+            files_label.setObjectName("SectionTitle")
             files_label.setFont(QFont("Segoe UI", 11, QFont.Bold))
-            files_label.setStyleSheet("color: #1f2937; margin-top: 10px;")
-            content_layout.addWidget(files_label)
+            files_layout.addWidget(files_label)
 
             if existing_tests:
                 tests_title = QLabel("Uploaded Test Files")
                 tests_title.setStyleSheet("color: #6b7280; font-weight: 700;")
-                content_layout.addWidget(tests_title)
-                for file_path in existing_tests:
-                    content_layout.addWidget(self._create_file_chip(file_path, request.get('id'), 'test'))
+                files_layout.addWidget(tests_title)
+
+                stored_test_names = request.get('uploaded_test_file_names') or []
+                tests_grid = QGridLayout()
+                tests_grid.setContentsMargins(0, 0, 0, 0)
+                tests_grid.setHorizontalSpacing(8)
+                tests_grid.setVerticalSpacing(8)
+                tests_grid.setColumnStretch(0, 1)
+                tests_grid.setColumnStretch(1, 1)
+
+                for idx, file_path in enumerate(existing_tests):
+                    display_name = ""
+                    if idx < len(stored_test_names):
+                        display_name = str(stored_test_names[idx]).strip()
+                    if not display_name:
+                        display_name = os.path.basename(file_path) or file_path
+
+                    chip = self._create_file_chip(
+                        file_path,
+                        request.get('id'),
+                        'test',
+                        file_index=idx,
+                        display_name=display_name,
+                    )
+                    chip.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                    tests_grid.addWidget(chip, idx // 2, idx % 2)
+
+                files_layout.addLayout(tests_grid)
 
             if request.get('segmentation_file'):
                 seg_title = QLabel("Segmentation File")
                 seg_title.setStyleSheet("color: #6b7280; font-weight: 700; margin-top: 8px;")
-                content_layout.addWidget(seg_title)
-                content_layout.addWidget(self._create_file_chip(str(request.get('segmentation_file')), request.get('id'), 'segmentation'))
+                files_layout.addWidget(seg_title)
+
+                segmentation_name = str(request.get('segmentation_file_name', '')).strip()
+                seg_value = str(request.get('segmentation_file'))
+                if not segmentation_name:
+                    segmentation_name = os.path.basename(seg_value) or seg_value
+
+                files_layout.addWidget(
+                    self._create_file_chip(
+                        seg_value,
+                        request.get('id'),
+                        'segmentation',
+                        file_index=0,
+                        display_name=segmentation_name,
+                    )
+                )
+
+            content_layout.addWidget(files_card)
 
         content_layout.addStretch()
         scroll.setWidget(content_widget)
@@ -964,9 +1139,13 @@ class RadiologistView:
         files_section_title.setStyleSheet("color: #374151; font-weight: 700;")
 
         files_list_widget = QWidget()
-        files_list_layout = QVBoxLayout(files_list_widget)
+        files_list_layout = QGridLayout(files_list_widget)
         files_list_layout.setContentsMargins(0, 0, 0, 0)
         files_list_layout.setSpacing(6)
+        files_list_layout.setHorizontalSpacing(8)
+        files_list_layout.setVerticalSpacing(6)
+        files_list_layout.setColumnStretch(0, 1)
+        files_list_layout.setColumnStretch(1, 1)
 
         empty_files_label = QLabel("No test files uploaded yet")
         empty_files_label.setStyleSheet("color: #9ca3af; font-style: italic;")
@@ -978,11 +1157,15 @@ class RadiologistView:
                     item.widget().deleteLater()
 
             if not selected_test_files:
-                files_list_layout.addWidget(empty_files_label)
+                files_list_layout.addWidget(empty_files_label, 0, 0, 1, 2)
                 return
 
-            for file_path in selected_test_files:
-                files_list_layout.addWidget(self._create_file_chip(file_path))
+            for index, file_path in enumerate(selected_test_files):
+                row = index // 2
+                col = index % 2
+                chip = self._create_file_chip(file_path)
+                chip.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                files_list_layout.addWidget(chip, row, col)
 
         upload_tests_btn = QPushButton("Upload Test Files")
         upload_tests_btn.setCursor(Qt.PointingHandCursor)
@@ -1169,15 +1352,24 @@ class RadiologistView:
             )
 
             if response.get('success'):
+                uploaded_test_names = [os.path.basename(path) or path for path in selected_test_files]
+                segmentation_display_name = ""
+                if segmentation_file:
+                    segmentation_display_name = os.path.basename(segmentation_file) or segmentation_file
+
                 self._update_completed_request_in_cache(
                     request_id=request.get('id'),
                     diagnosis_type=diagnosis_type.currentText(),
                     test_file=test_files_value,
                     segmentation_file=segmentation_file_id,
+                    test_file_names=uploaded_test_names,
+                    segmentation_file_name=segmentation_display_name,
                 )
                 request['diagnosis_type'] = diagnosis_type.currentText()
                 request['uploaded_test_file'] = test_files_value
+                request['uploaded_test_file_names'] = uploaded_test_names
                 request['segmentation_file'] = segmentation_file_id
+                request['segmentation_file_name'] = segmentation_display_name
                 request['status'] = 'Completed'
                 self.apply_radiologist_filter()
                 self.parent.show_message_box("Success", response.get('message', 'Case completed successfully.'), "information")

@@ -3,11 +3,20 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushB
                                QFrame, QSizePolicy, QMessageBox, QDialog, QFormLayout,
                                QLineEdit, QComboBox, QSpinBox, QScrollArea, QPlainTextEdit,
                                QApplication, QCompleter, QTableWidget, QTableWidgetItem, QHeaderView,
-                               QStackedWidget, QFileDialog)
-from PySide6.QtCore import Qt, QThread, Signal, QStringListModel, QTimer
+                               QStackedWidget, QFileDialog, QDateEdit, QGridLayout)
+from PySide6.QtCore import Qt, QThread, Signal, QStringListModel, QTimer, QDate
 from PySide6.QtGui import QFont, QIntValidator, QPainter, QColor, QDesktopServices
 from PySide6.QtCore import QUrl
 from api_client import api_client
+from shared_request_ui import (
+    REQUEST_DETAILS_DIALOG_STYLESHEET,
+    DATE_FILTER_CLEAR_BUTTON_STYLESHEET,
+    clean_value,
+    create_date_filter_label,
+    create_standard_date_filter_edit,
+    make_badge,
+    make_section_card,
+)
 from datetime import datetime
 import os
 import math
@@ -182,6 +191,9 @@ class DoctorView:
         self.requests_list_widget = None
         self.requests_list_layout = None
         self.inbox_search_input = None
+        self.inbox_date_from = None
+        self.inbox_date_to = None
+        self.inbox_date_filter_active = False
         self.inbox_all_requests = []
         self.inbox_loading_spinner = None
         self.inbox_loader = None
@@ -630,6 +642,18 @@ class DoctorView:
             }
         """)
         self.inbox_search_input.textChanged.connect(self.apply_inbox_filter)
+
+        self.inbox_date_from = create_standard_date_filter_edit()
+        self.inbox_date_to = create_standard_date_filter_edit()
+
+        self.inbox_date_from.dateChanged.connect(self._activate_inbox_date_filter)
+        self.inbox_date_to.dateChanged.connect(self._activate_inbox_date_filter)
+
+        clear_date_btn = QPushButton("Clear")
+        clear_date_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
+        clear_date_btn.setCursor(Qt.PointingHandCursor)
+        clear_date_btn.setStyleSheet(DATE_FILTER_CLEAR_BUTTON_STYLESHEET)
+        clear_date_btn.clicked.connect(self.clear_inbox_date_filter)
         
         refresh_btn = QPushButton("🔄 Refresh")
         refresh_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
@@ -652,6 +676,15 @@ class DoctorView:
         header_layout.addWidget(subtitle)
         header_layout.addStretch()
         header_layout.addWidget(self.inbox_search_input)
+
+        from_label = create_date_filter_label("From")
+        to_label = create_date_filter_label("To")
+
+        header_layout.addWidget(from_label)
+        header_layout.addWidget(self.inbox_date_from)
+        header_layout.addWidget(to_label)
+        header_layout.addWidget(self.inbox_date_to)
+        header_layout.addWidget(clear_date_btn)
         header_layout.addWidget(refresh_btn)
         
         layout.addLayout(header_layout)
@@ -767,7 +800,7 @@ class DoctorView:
         self.requests_list_layout.addStretch()
 
     def apply_inbox_filter(self):
-        """Filter cached inbox requests by patient ID or patient name."""
+        """Filter cached inbox requests by patient ID, patient name, or created date."""
         # Prevent accidental card click right after typing/clear-button interactions.
         self.inbox_click_guard_until = time.monotonic() + 0.30
 
@@ -784,6 +817,13 @@ class DoctorView:
             requests = [
                 request for request in requests
                 if self._matches_request_search(request, search_query)
+            ]
+
+        selected_from, selected_to = self._get_inbox_filter_range()
+        if selected_from is not None or selected_to is not None:
+            requests = [
+                request for request in requests
+                if self._matches_request_date_range(request, selected_from, selected_to)
             ]
         
         if not requests:
@@ -822,6 +862,69 @@ class DoctorView:
         patient_id = str(request.get('patient_id', '')).lower()
         patient_name = str(request.get('patient_name', '')).lower()
         return search_query in patient_id or search_query in patient_name
+
+    def _activate_inbox_date_filter(self):
+        """Enable the inbox date filter after the user selects a date."""
+        self.inbox_date_filter_active = True
+        self.apply_inbox_filter()
+
+    def clear_inbox_date_filter(self):
+        """Show inbox requests from all dates."""
+        self.inbox_date_filter_active = False
+        if self.inbox_date_from is not None and self.inbox_date_to is not None:
+            today = QDate.currentDate()
+            self.inbox_date_from.blockSignals(True)
+            self.inbox_date_to.blockSignals(True)
+            self.inbox_date_from.setDate(today)
+            self.inbox_date_to.setDate(today)
+            self.inbox_date_from.blockSignals(False)
+            self.inbox_date_to.blockSignals(False)
+        self.apply_inbox_filter()
+
+    def _get_inbox_filter_range(self):
+        if not self.inbox_date_filter_active or self.inbox_date_from is None or self.inbox_date_to is None:
+            return None, None
+
+        from_qdate = self.inbox_date_from.date()
+        to_qdate = self.inbox_date_to.date()
+        from_date = datetime(from_qdate.year(), from_qdate.month(), from_qdate.day()).date()
+        to_date = datetime(to_qdate.year(), to_qdate.month(), to_qdate.day()).date()
+
+        if from_date <= to_date:
+            return from_date, to_date
+        return to_date, from_date
+
+    def _request_created_date(self, request):
+        """Return the request created date when it can be parsed."""
+        created_at = request.get('created_at', '')
+        if not created_at:
+            return None
+
+        created_at_str = str(created_at).strip()
+        try:
+            normalized = created_at_str.replace('Z', '+00:00')
+            return datetime.fromisoformat(normalized).date()
+        except Exception:
+            pass
+
+        if len(created_at_str) >= 10 and created_at_str[4] == '-' and created_at_str[7] == '-':
+            try:
+                return datetime.strptime(created_at_str[:10], '%Y-%m-%d').date()
+            except Exception:
+                return None
+
+        return None
+
+    def _matches_request_date_range(self, request, selected_from, selected_to):
+        """Return True when request created date falls within from/to date range."""
+        request_date = self._request_created_date(request)
+        if request_date is None:
+            return False
+        if selected_from is not None and request_date < selected_from:
+            return False
+        if selected_to is not None and request_date > selected_to:
+            return False
+        return True
 
     def _mark_request_read_in_cache(self, request_id):
         """Keep local cache in sync after marking a request as read."""
@@ -1102,7 +1205,7 @@ class DoctorView:
             event.ignore()
             return
         event.accept()
-        self.show_request_details(request, card_widget)
+        QTimer.singleShot(0, lambda req=request, req_card=card_widget: self.show_request_details(req, req_card))
     
     def _download_attached_file(self, request_id, file_type, file_index):
         """Download an attached file from a request."""
@@ -1176,131 +1279,160 @@ class DoctorView:
         
         dialog = QDialog(self.parent)
         dialog.setWindowTitle(f"Request Details - {request['patient_id']}")
-        dialog.setMinimumWidth(600)
-        dialog.setMinimumHeight(500)
-        dialog.setStyleSheet("""
-            QDialog {
-                background: #f3f4f6;
-            }
-            QLabel {
-                color: #374151;
-            }
-        """)
-        
+        dialog.setMinimumWidth(530)
+        dialog.setMinimumHeight(600)
+        dialog.resize(530, 600)
+        dialog.setStyleSheet(REQUEST_DETAILS_DIALOG_STYLESHEET)
+
         layout = QVBoxLayout(dialog)
-        layout.setSpacing(12)
-        layout.setContentsMargins(20, 20, 20, 20)
-        
-        # Title with patient ID
-        title = QLabel(f"Patient ID: {request['patient_id']}")
-        title_font = QFont("Segoe UI", 14, QFont.Bold)
-        title.setFont(title_font)
-        title.setStyleSheet("color: #1f2937;")
-        layout.addWidget(title)
-        
-        # Create scrollable content area
+        layout.setSpacing(14)
+        layout.setContentsMargins(18, 18, 18, 18)
+
+        header_card = QFrame()
+        header_card.setObjectName("HeaderCard")
+        header_layout = QVBoxLayout(header_card)
+        header_layout.setContentsMargins(18, 16, 18, 16)
+        header_layout.setSpacing(10)
+
+        title = QLabel(f"Case Information • {clean_value(request.get('patient_id'))}")
+        title.setFont(QFont("Segoe UI", 16, QFont.Bold))
+        title.setStyleSheet("color: #111827;")
+        header_layout.addWidget(title)
+
+        subtitle = QLabel(f"{clean_value(request.get('patient_name'))}  •  {clean_value(request.get('diagnosis_type'))}")
+        subtitle.setObjectName("MutedText")
+        subtitle.setFont(QFont("Segoe UI", 10))
+        header_layout.addWidget(subtitle)
+
+        badge_row = QHBoxLayout()
+        badge_row.setSpacing(8)
+        badge_row.addWidget(make_badge(f"Status: {request.get('status', 'N/A')}", "#ecfeff", "#155e75", "#a5f3fc"))
+        badge_row.addWidget(make_badge(f"Priority: {request.get('priority', 'N/A')}", "#fff7ed", "#9a3412", "#fed7aa"))
+        badge_row.addWidget(make_badge(f"Scan Date: {request.get('scan_date', 'N/A')}", "#eef2ff", "#3730a3", "#c7d2fe"))
+        badge_row.addStretch()
+        header_layout.addLayout(badge_row)
+
+        layout.addWidget(header_card)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet("border: none; background: transparent;")
-        
+
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
         content_layout.setSpacing(12)
-        
-        # Details in sections
-        details = [
-            ("Patient Information", [
-                (f"Patient Name", request.get('patient_name', 'N/A')),
-                (f"Patient ID", request.get('patient_id', 'N/A')),
-                (f"Email", request.get('patient_email', 'N/A')),
-                (f"Phone", request.get('phone_number', 'N/A')),
-            ]),
-            ("Medical Information", [
-                (f"Diagnosis Type", request.get('diagnosis_type', 'N/A')),
-                (f"Age", request.get('patient_age', 'N/A')),
-                (f"Gender", request.get('patient_gender', 'N/A')),
-            ]),
-            ("Case Information", [
-                (f"Patient ID", request['patient_id']),
-                (f"Sent To", request.get('radiologist_email', 'N/A')),
-                (f"Priority", request['priority']),
-                (f"Status", request['status']),
-                (f"Scan Date", request.get('scan_date', 'N/A')),
-            ]),
+        content_layout.setContentsMargins(2, 2, 2, 2)
+
+        patient_rows = [
+            ("Patient Name", QLabel(clean_value(request.get('patient_name')))),
+            ("Patient ID", QLabel(clean_value(request.get('patient_id')))),
+            ("Email", QLabel(clean_value(request.get('patient_email')))),
+            ("Phone", QLabel(clean_value(request.get('phone_number')))),
         ]
-        
-        for section_title, section_items in details:
-            # Section header
-            section_label = QLabel(section_title)
-            section_font = QFont("Segoe UI", 11, QFont.Bold)
-            section_label.setFont(section_font)
-            section_label.setStyleSheet("color: #1f2937; margin-top: 10px;")
-            content_layout.addWidget(section_label)
-            
-            # Section items
-            for label_text, value_text in section_items:
-                item_layout = QHBoxLayout()
-                label = QLabel(label_text)
-                label_font = QFont("Segoe UI", 9)
-                label.setFont(label_font)
-                label.setStyleSheet("color: #6b7280; font-weight: bold;")
-                label.setMinimumWidth(120)
-                
-                value = QLabel(str(value_text))
-                value_font = QFont("Segoe UI", 9)
-                value.setFont(value_font)
-                value.setStyleSheet("color: #111827;")
-                
-                item_layout.addWidget(label)
-                item_layout.addWidget(value)
-                item_layout.addStretch()
-                
-                content_layout.addLayout(item_layout)
-        
-        # Description section
+        medical_rows = [
+            ("Diagnosis Type", QLabel(clean_value(request.get('diagnosis_type')))),
+            ("Age", QLabel(clean_value(request.get('patient_age')))),
+            ("Gender", QLabel(clean_value(request.get('patient_gender')))),
+            ("Sent To", QLabel(clean_value(request.get('radiologist_email')))),
+        ]
+
+        priority_label = make_badge(request.get('priority', 'N/A'), "#fff7ed", "#9a3412", "#fed7aa")
+        status_label = make_badge(request.get('status', 'N/A'), "#ecfeff", "#155e75", "#a5f3fc")
+        scan_date_label = QLabel(clean_value(request.get('scan_date')))
+        scan_date_label.setStyleSheet("color: #111827; padding-top: 4px;")
+
+        case_rows = [
+            ("Priority", priority_label),
+            ("Status", status_label),
+            ("Scan Date", scan_date_label),
+        ]
+
+        content_layout.addWidget(make_section_card("Patient Information", patient_rows))
+        content_layout.addWidget(make_section_card("Medical Information", medical_rows))
+        content_layout.addWidget(make_section_card("Case Information", case_rows))
+
         if request.get('description'):
+            desc_card = QFrame()
+            desc_card.setObjectName("SectionCard")
+            desc_layout = QVBoxLayout(desc_card)
+            desc_layout.setContentsMargins(16, 14, 16, 14)
+            desc_layout.setSpacing(10)
+
             desc_label = QLabel("Description")
-            desc_font = QFont("Segoe UI", 11, QFont.Bold)
-            desc_label.setFont(desc_font)
-            desc_label.setStyleSheet("color: #1f2937; margin-top: 10px;")
-            content_layout.addWidget(desc_label)
-            
+            desc_label.setObjectName("SectionTitle")
+            desc_label.setFont(QFont("Segoe UI", 11, QFont.Bold))
+            desc_layout.addWidget(desc_label)
+
             desc_text = QPlainTextEdit()
             desc_text.setPlainText(request['description'])
             desc_text.setReadOnly(True)
-            desc_text.setMinimumHeight(100)
+            desc_text.setMinimumHeight(120)
             desc_text.setStyleSheet("""
                 QPlainTextEdit {
-                    background: white;
+                    background: #f9fafb;
                     border: 1px solid #e5e7eb;
-                    border-radius: 6px;
-                    padding: 8px;
+                    border-radius: 10px;
+                    padding: 10px;
                     color: #111827;
                 }
             """)
-            content_layout.addWidget(desc_text)
+            desc_layout.addWidget(desc_text)
+            content_layout.addWidget(desc_card)
 
         if request.get('uploaded_test_file') or request.get('segmentation_file'):
+            files_card = QFrame()
+            files_card.setObjectName("SectionCard")
+            files_layout = QVBoxLayout(files_card)
+            files_layout.setContentsMargins(16, 14, 16, 14)
+            files_layout.setSpacing(10)
+
             files_label = QLabel("Attached Files")
-            files_font = QFont("Segoe UI", 11, QFont.Bold)
-            files_label.setFont(files_font)
-            files_label.setStyleSheet("color: #1f2937; margin-top: 10px;")
-            content_layout.addWidget(files_label)
+            files_label.setObjectName("SectionTitle")
+            files_label.setFont(QFont("Segoe UI", 11, QFont.Bold))
+            files_layout.addWidget(files_label)
 
             uploaded_tests = [item.strip() for item in str(request.get('uploaded_test_file', '')).split('|') if item.strip()]
 
             if uploaded_tests:
                 tests_title = QLabel("Uploaded Test Files")
+                tests_title.setObjectName("MutedText")
                 tests_title.setStyleSheet("color: #6b7280; font-weight: 700;")
-                content_layout.addWidget(tests_title)
+                files_layout.addWidget(tests_title)
+
+                stored_test_names = request.get('uploaded_test_file_names') or []
+                tests_grid = QGridLayout()
+                tests_grid.setContentsMargins(0, 0, 0, 0)
+                tests_grid.setHorizontalSpacing(8)
+                tests_grid.setVerticalSpacing(8)
+                tests_grid.setColumnStretch(0, 1)
+                tests_grid.setColumnStretch(1, 1)
+
                 for idx, file_path in enumerate(uploaded_tests):
-                    file_row = QHBoxLayout()
-                    file_label_text = f"📄 Test File {idx + 1}" if file_path.isdigit() else f"📄 {os.path.basename(file_path)}"
-                    file_label = QLabel(file_label_text)
+                    display_name = ""
+                    if idx < len(stored_test_names):
+                        display_name = str(stored_test_names[idx]).strip()
+                    if not display_name:
+                        display_name = os.path.basename(file_path) or file_path
+
+                    file_chip = QFrame()
+                    file_chip.setStyleSheet("""
+                        QFrame {
+                            background: #f8fafc;
+                            border: 1px solid #e2e8f0;
+                            border-radius: 8px;
+                        }
+                    """)
+                    file_row = QHBoxLayout(file_chip)
+                    file_row.setContentsMargins(10, 7, 10, 7)
+                    file_row.setSpacing(8)
+
+                    file_label = QLabel(f"📄 {display_name}")
                     file_label.setStyleSheet("color: #111827;")
                     file_label.setWordWrap(True)
+                    file_label.setToolTip(display_name)
                     file_row.addWidget(file_label)
-                    
+                    file_row.addStretch()
+
                     if request.get('id'):
                         open_btn = QPushButton("Open")
                         open_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
@@ -1340,27 +1472,31 @@ class DoctorView:
                         """)
                         download_btn.setFixedWidth(80)
                         download_btn.clicked.connect(
-                            lambda checked, req_id=request.get('id'), f_type='test', f_idx=idx: 
+                            lambda checked, req_id=request.get('id'), f_type='test', f_idx=idx:
                             self._download_attached_file(req_id, f_type, f_idx)
                         )
                         file_row.addWidget(open_btn)
                         file_row.addWidget(download_btn)
-                    
-                    file_row.addStretch()
-                    content_layout.addLayout(file_row)
+
+                    tests_grid.addWidget(file_chip, idx // 2, idx % 2)
+
+                files_layout.addLayout(tests_grid)
 
             if request.get('segmentation_file'):
                 seg_title = QLabel("Segmentation File")
                 seg_title.setStyleSheet("color: #6b7280; font-weight: 700; margin-top: 8px;")
-                content_layout.addWidget(seg_title)
-                
+                files_layout.addWidget(seg_title)
+
                 seg_row = QHBoxLayout()
                 seg_value = str(request.get('segmentation_file', 'N/A'))
-                seg_label = QLabel("📄 Segmentation File" if seg_value.isdigit() else f"📄 {os.path.basename(seg_value)}")
+                seg_name = str(request.get('segmentation_file_name', '')).strip()
+                if not seg_name:
+                    seg_name = os.path.basename(seg_value) or seg_value
+                seg_label = QLabel(f"📄 {seg_name}")
                 seg_label.setStyleSheet("color: #111827;")
                 seg_label.setWordWrap(True)
                 seg_row.addWidget(seg_label)
-                
+
                 if request.get('id'):
                     open_btn = QPushButton("Open")
                     open_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
@@ -1400,37 +1536,38 @@ class DoctorView:
                     """)
                     download_btn.setFixedWidth(80)
                     download_btn.clicked.connect(
-                        lambda checked, req_id=request.get('id'): 
+                        lambda checked, req_id=request.get('id'):
                         self._download_attached_file(req_id, 'segmentation', 0)
                     )
                     seg_row.addWidget(open_btn)
                     seg_row.addWidget(download_btn)
-                
+
                 seg_row.addStretch()
-                content_layout.addLayout(seg_row)
-        
+                files_layout.addLayout(seg_row)
+
+            content_layout.addWidget(files_card)
+
         content_layout.addStretch()
         scroll.setWidget(content_widget)
         layout.addWidget(scroll)
-        
-        # Close button
+
         close_btn = QPushButton("Close")
         close_btn.setFont(QFont("Segoe UI", 9, QFont.Bold))
         close_btn.setStyleSheet("""
             QPushButton {
-                background: #e5e7eb;
-                color: #111827;
+                background: #111827;
+                color: white;
                 border: none;
-                border-radius: 6px;
+                border-radius: 8px;
                 padding: 8px 20px;
             }
             QPushButton:hover {
-                background: #d1d5db;
+                background: #374151;
             }
         """)
         close_btn.clicked.connect(dialog.accept)
         layout.addWidget(close_btn)
-        
+
         dialog.exec()
 
     def open_add_patient_form(self, on_success=None):
@@ -2082,7 +2219,7 @@ class DoctorView:
                 patient_email=patient_email.text().strip(),
                 phone_number=phone_number.text().strip(),
                 diagnosis_type=diagnosis_type.currentText(),
-                scan_date=datetime.now().strftime("%Y-%m-%d"),
+                scan_date=datetime.now().strftime("%d-%m-%Y"),
                 priority=priority.currentText(),
                 radiologist_email=radiologist_email_value,
                 description=description.toPlainText().strip()
