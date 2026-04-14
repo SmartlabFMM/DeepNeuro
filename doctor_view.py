@@ -3,9 +3,11 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushB
                                QFrame, QSizePolicy, QMessageBox, QDialog, QFormLayout,
                                QLineEdit, QComboBox, QSpinBox, QScrollArea, QPlainTextEdit,
                                QApplication, QCompleter, QTableWidget, QTableWidgetItem, QHeaderView,
-                               QStackedWidget, QFileDialog, QDateEdit, QGridLayout)
-from PySide6.QtCore import Qt, QThread, Signal, QStringListModel, QTimer, QDate
-from PySide6.QtGui import QFont, QIntValidator, QPainter, QColor, QDesktopServices
+                               QStackedWidget, QFileDialog, QDateEdit, QGridLayout, QListWidget,
+                               QListWidgetItem, QSlider, QSplitter, QAbstractItemView,
+                               )
+from PySide6.QtCore import Qt, QThread, Signal, QStringListModel, QTimer, QDate, QMimeData
+from PySide6.QtGui import QFont, QIntValidator, QPainter, QColor, QDesktopServices, QImage, QPixmap
 from PySide6.QtCore import QUrl
 from api_client import api_client
 from shared_request_ui import (
@@ -18,9 +20,534 @@ from shared_request_ui import (
     make_section_card,
 )
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import math
 import time
+import threading
+
+
+class DraggableSequenceList(QListWidget):
+    """List widget that drags a custom file-key payload."""
+    MIME_TYPE = "application/x-deepneuro-seq-key"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(False)
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setDefaultDropAction(Qt.CopyAction)
+
+    def mimeTypes(self):
+        return [self.MIME_TYPE]
+
+    def mimeData(self, items):
+        mime_data = QMimeData()
+        if not items:
+            return mime_data
+
+        item = items[0]
+        key = str(item.data(Qt.UserRole) or "")
+        mime_data.setData(self.MIME_TYPE, key.encode("utf-8"))
+        mime_data.setText(item.text())
+        return mime_data
+
+
+class SequenceDropPanel(QFrame):
+    """Drop target panel that displays one sequence slice with colormap."""
+
+    def __init__(self, panel_index, on_drop_file, on_colormap_changed, on_scroll_slice, parent=None):
+        super().__init__(parent)
+        self.panel_index = panel_index
+        self.on_drop_file = on_drop_file
+        self.on_colormap_changed = on_colormap_changed
+        self.on_scroll_slice = on_scroll_slice
+        self.setAcceptDrops(True)
+        self.setStyleSheet("""
+            QFrame {
+                background: #f8fafc;
+                border: 1px solid #dbe2ea;
+                border-radius: 8px;
+            }
+        """)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(6)
+
+        header = QHBoxLayout()
+        header.setSpacing(6)
+        self.title_label = QLabel(f"Panel {panel_index + 1}")
+        self.title_label.setStyleSheet("color: #334155; font-weight: 700;")
+
+        self.cmap_combo = QComboBox()
+        self.cmap_combo.addItems([
+            "Grayscale",
+            "Hot",
+            "Jet",
+            "Inferno",
+            "Viridis",
+            "Plasma",
+            "Magma",
+            "Bone",
+            "Spring",
+        ])
+        self.cmap_combo.setCurrentText("Grayscale")
+        self.cmap_combo.setFixedWidth(120)
+        self.cmap_combo.currentTextChanged.connect(
+            lambda _text: self.on_colormap_changed(self.panel_index)
+        )
+        self.cmap_combo.setVisible(False)
+
+        header.addWidget(self.title_label)
+        header.addStretch()
+        header.addWidget(self.cmap_combo)
+
+        self.image_label = QLabel("Drop a sequence file here")
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setStyleSheet("""
+            QLabel {
+                color: #64748b;
+                border: 1px dashed #cbd5e1;
+                border-radius: 6px;
+                background: white;
+            }
+        """)
+        self.image_label.setMinimumHeight(220)
+
+        self.slice_info_label = QLabel("No file assigned")
+        self.slice_info_label.setAlignment(Qt.AlignRight)
+        self.slice_info_label.setStyleSheet("color: #64748b; font-size: 11px;")
+
+        root.addLayout(header)
+        root.addWidget(self.image_label, 1)
+        root.addWidget(self.slice_info_label)
+        self.apply_contrast_theme(dark_background=False)
+
+    def set_has_sequence(self, has_sequence):
+        """Show colormap options only when a sequence is assigned."""
+        self.cmap_combo.setVisible(bool(has_sequence))
+
+    def apply_contrast_theme(self, dark_background):
+        """Auto-adjust text colors to maintain contrast against image background."""
+        if dark_background:
+            title_color = "#e2e8f0"
+            info_color = "#cbd5e1"
+            border_color = "#475569"
+            panel_bg = "#111827"
+            image_bg = "#0f172a"
+            placeholder_color = "#cbd5e1"
+            combo_bg = "#0f172a"
+            combo_text = "#e2e8f0"
+            combo_border = "#475569"
+        else:
+            title_color = "#334155"
+            info_color = "#64748b"
+            border_color = "#cbd5e1"
+            panel_bg = "#f8fafc"
+            image_bg = "#ffffff"
+            placeholder_color = "#64748b"
+            combo_bg = "#ffffff"
+            combo_text = "#0f172a"
+            combo_border = "#cbd5e1"
+
+        self.setStyleSheet(f"""
+            QFrame {{
+                background: {panel_bg};
+                border: 1px solid #dbe2ea;
+                border-radius: 8px;
+            }}
+        """)
+        self.title_label.setStyleSheet(f"color: {title_color}; font-weight: 700;")
+        self.slice_info_label.setStyleSheet(f"color: {info_color}; font-size: 11px;")
+        self.image_label.setStyleSheet(f"""
+            QLabel {{
+                color: {placeholder_color};
+                border: 1px dashed {border_color};
+                border-radius: 6px;
+                background: {image_bg};
+            }}
+        """)
+        self.cmap_combo.setStyleSheet(f"""
+            QComboBox {{
+                background: {combo_bg};
+                color: {combo_text};
+                border: 1px solid {combo_border};
+                border-radius: 6px;
+                padding: 4px 8px;
+            }}
+            QComboBox QAbstractItemView {{
+                background: {combo_bg};
+                color: {combo_text};
+                selection-background-color: #2563eb;
+                selection-color: white;
+                border: 1px solid {combo_border};
+            }}
+        """)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(DraggableSequenceList.MIME_TYPE):
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dropEvent(self, event):
+        if not event.mimeData().hasFormat(DraggableSequenceList.MIME_TYPE):
+            event.ignore()
+            return
+
+        seq_key = bytes(event.mimeData().data(DraggableSequenceList.MIME_TYPE)).decode("utf-8")
+        if seq_key:
+            self.on_drop_file(self.panel_index, seq_key)
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def wheelEvent(self, event):
+        delta = event.angleDelta().y()
+        if delta != 0:
+            self.on_scroll_slice(1 if delta > 0 else -1)
+            event.accept()
+            return
+        event.ignore()
+
+
+class CaseSequenceViewerDialog(QDialog):
+    """Visualize multiple 3D test sequences with synchronized scrolling."""
+
+    def __init__(self, parent, sequence_entries, case_info=None):
+        super().__init__(parent)
+        self.setWindowTitle("Case Sequence Viewer")
+        self.setMinimumSize(1250, 780)
+        self.case_info = case_info or {}
+
+        self.sequence_by_key = {
+            str(entry["key"]): {
+                "name": str(entry["name"]),
+                "volume": entry["volume"],
+            }
+            for entry in sequence_entries
+        }
+        self.panel_assignments = [None, None, None, None]
+        self.panels = []
+
+        max_depth = 1
+        for entry in self.sequence_by_key.values():
+            depth = int(entry["volume"].shape[2]) if entry["volume"].ndim >= 3 else 1
+            max_depth = max(max_depth, depth)
+        self.max_depth = max_depth
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(10)
+
+        splitter = QSplitter(Qt.Horizontal)
+
+        sidebar = QFrame()
+        sidebar.setMinimumWidth(340)
+        sidebar.setStyleSheet("""
+            QFrame {
+                background: #0f172a;
+                border: 1px solid #1e293b;
+                border-radius: 10px;
+            }
+        """)
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(10, 10, 10, 10)
+        sidebar_layout.setSpacing(10)
+
+        case_card = QFrame()
+        case_card.setMinimumHeight(260)
+        case_card.setStyleSheet("""
+            QFrame {
+                background: #f8fafc;
+                border: 1px solid #dbe2ea;
+                border-radius: 8px;
+            }
+        """)
+        case_layout = QVBoxLayout(case_card)
+        case_layout.setContentsMargins(10, 10, 10, 10)
+        case_layout.setSpacing(6)
+
+        case_title = QLabel("Case Information")
+        case_title.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        case_title.setStyleSheet("color: #0f172a; font-weight: 700;")
+        case_layout.addWidget(case_title)
+
+        case_rows = [
+            ("Patient", clean_value(self.case_info.get("patient_name"))),
+            ("Patient ID", clean_value(self.case_info.get("patient_id"))),
+            ("Diagnosis", clean_value(self.case_info.get("diagnosis_type"))),
+            ("Priority", clean_value(self.case_info.get("priority"))),
+            ("Status", clean_value(self.case_info.get("status"))),
+            ("Scan Date", clean_value(self.case_info.get("scan_date"))),
+        ]
+
+        for label_text, value_text in case_rows:
+            row = QLabel(
+                f"<span style='color:#64748b; font-weight:600;'>{label_text}:</span> "
+                f"<span style='color:#0f172a; font-weight:700;'>{value_text}</span>"
+            )
+            row.setWordWrap(True)
+            case_layout.addWidget(row)
+
+        files_info_card = QFrame()
+        files_info_card.setStyleSheet("""
+            QFrame {
+                background: #111827;
+                border: 1px solid #334155;
+                border-radius: 8px;
+            }
+        """)
+        files_info_layout = QVBoxLayout(files_info_card)
+        files_info_layout.setContentsMargins(10, 10, 10, 10)
+        files_info_layout.setSpacing(4)
+
+        files_title = QLabel("Test Files")
+        files_title.setFont(QFont("Segoe UI", 13, QFont.Bold))
+        files_title.setStyleSheet("color: #f8fafc; font-weight: 700;")
+        files_help = QLabel("Drag any file onto one of the 4 panels")
+        files_help.setWordWrap(True)
+        files_help.setStyleSheet("color: #cbd5e1;")
+        files_help.setMinimumHeight(34)
+
+        files_info_layout.addWidget(files_title)
+
+        self.file_list = DraggableSequenceList()
+        self.file_list.setStyleSheet("""
+            QListWidget {
+                background: white;
+                border: 1px solid #dbe2ea;
+                border-radius: 8px;
+                padding: 4px;
+                color: #0f172a;
+            }
+            QListWidget::item {
+                padding: 8px;
+                border-radius: 6px;
+                margin: 2px;
+                color: #0f172a;
+            }
+            QListWidget::item:hover {
+                background: #f1f5f9;
+            }
+            QListWidget::item:selected {
+                background: #e0f2fe;
+                color: #0f172a;
+            }
+        """)
+        self.file_list.setMinimumHeight(240)
+
+        files_info_layout.addWidget(self.file_list, 1)
+        files_info_layout.addWidget(files_help)
+
+        for key, entry in self.sequence_by_key.items():
+            item = QListWidgetItem(f"📄 {entry['name']}")
+            item.setData(Qt.UserRole, key)
+            item.setToolTip(entry['name'])
+            self.file_list.addItem(item)
+
+        sidebar_layout.addWidget(case_card, 3)
+        sidebar_layout.addWidget(files_info_card, 2)
+
+        viewer_container = QFrame()
+        viewer_layout = QVBoxLayout(viewer_container)
+        viewer_layout.setContentsMargins(0, 0, 0, 0)
+        viewer_layout.setSpacing(8)
+
+        panel_grid = QGridLayout()
+        panel_grid.setContentsMargins(0, 0, 0, 0)
+        panel_grid.setHorizontalSpacing(8)
+        panel_grid.setVerticalSpacing(8)
+
+        for panel_index in range(4):
+            panel = SequenceDropPanel(
+                panel_index,
+                self.assign_sequence_to_panel,
+                self.on_panel_colormap_changed,
+                self.adjust_slice,
+            )
+            self.panels.append(panel)
+            panel_grid.addWidget(panel, panel_index // 2, panel_index % 2)
+
+        controls = QHBoxLayout()
+        controls.setSpacing(10)
+
+        slice_text_label = QLabel("Slice")
+        slice_text_label.setStyleSheet("color: #e2e8f0; font-weight: 600;")
+        controls.addWidget(slice_text_label)
+        self.slice_slider = QSlider(Qt.Horizontal)
+        self.slice_slider.setMinimum(0)
+        self.slice_slider.setMaximum(max(0, self.max_depth - 1))
+        self.slice_slider.setValue(self.slice_slider.maximum() // 2)
+        self.slice_slider.valueChanged.connect(self.render_all_panels)
+        controls.addWidget(self.slice_slider, 1)
+
+        self.slice_value_label = QLabel("")
+        self.slice_value_label.setStyleSheet("color: #e2e8f0; font-weight: 600;")
+        controls.addWidget(self.slice_value_label)
+
+        viewer_layout.addLayout(panel_grid, 1)
+        viewer_layout.addLayout(controls)
+
+        splitter.addWidget(sidebar)
+        splitter.addWidget(viewer_container)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+
+        root.addWidget(splitter, 1)
+
+        close_btn = QPushButton("Close Viewer")
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background: #0f172a;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 8px 16px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background: #1e293b;
+            }
+        """)
+        close_btn.clicked.connect(self.accept)
+        root.addWidget(close_btn, alignment=Qt.AlignRight)
+
+        self.render_all_panels()
+
+    def adjust_slice(self, delta):
+        new_value = self.slice_slider.value() + delta
+        new_value = max(self.slice_slider.minimum(), min(self.slice_slider.maximum(), new_value))
+        self.slice_slider.setValue(new_value)
+
+    def assign_sequence_to_panel(self, panel_index, seq_key):
+        if seq_key not in self.sequence_by_key:
+            return
+        self.panel_assignments[panel_index] = seq_key
+        self.render_all_panels()
+
+    def on_panel_colormap_changed(self, _panel_index):
+        self.render_all_panels()
+
+    def _normalize_slice(self, slice_2d):
+        import numpy as np
+
+        arr = np.nan_to_num(slice_2d.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+        min_v = float(arr.min())
+        max_v = float(arr.max())
+        if max_v > min_v:
+            return (arr - min_v) / (max_v - min_v)
+        return np.zeros_like(arr, dtype=np.float32)
+
+    def _apply_colormap(self, normalized, cmap_name):
+        import numpy as np
+
+        x = normalized
+        if cmap_name == "Grayscale":
+            rgb = np.stack([x, x, x], axis=-1)
+        elif cmap_name == "Hot":
+            r = np.clip(3.0 * x, 0, 1)
+            g = np.clip(3.0 * x - 1.0, 0, 1)
+            b = np.clip(3.0 * x - 2.0, 0, 1)
+            rgb = np.stack([r, g, b], axis=-1)
+        elif cmap_name == "Jet":
+            r = np.clip(1.5 - np.abs(4.0 * x - 3.0), 0, 1)
+            g = np.clip(1.5 - np.abs(4.0 * x - 2.0), 0, 1)
+            b = np.clip(1.5 - np.abs(4.0 * x - 1.0), 0, 1)
+            rgb = np.stack([r, g, b], axis=-1)
+        elif cmap_name == "Inferno":
+            r = np.clip(x ** 0.45, 0, 1)
+            g = np.clip(x ** 1.15, 0, 1)
+            b = np.clip(x ** 3.0, 0, 1)
+            rgb = np.stack([r, g, b], axis=-1)
+        elif cmap_name == "Viridis":
+            r = np.clip(0.23 + 0.75 * x, 0, 1)
+            g = np.clip(0.15 + 0.85 * (x ** 1.1), 0, 1)
+            b = np.clip(0.35 + 0.45 * (1.0 - x), 0, 1)
+            rgb = np.stack([r, g, b], axis=-1)
+        elif cmap_name == "Plasma":
+            r = np.clip(0.35 + 0.85 * x, 0, 1)
+            g = np.clip(0.05 + 0.55 * np.sqrt(x), 0, 1)
+            b = np.clip(0.55 + 0.45 * (1.0 - x), 0, 1)
+            rgb = np.stack([r, g, b], axis=-1)
+        elif cmap_name == "Magma":
+            r = np.clip(0.1 + 1.2 * (x ** 1.15), 0, 1)
+            g = np.clip(0.02 + 0.75 * (x ** 1.7), 0, 1)
+            b = np.clip(0.18 + 0.55 * (1.0 - x) ** 1.3, 0, 1)
+            rgb = np.stack([r, g, b], axis=-1)
+        elif cmap_name == "Bone":
+            r = np.clip(0.15 + 0.85 * x, 0, 1)
+            g = np.clip(0.2 + 0.8 * x, 0, 1)
+            b = np.clip(0.25 + 0.75 * x, 0, 1)
+            rgb = np.stack([r, g, b], axis=-1)
+        else:  # Spring
+            rgb = np.stack([np.ones_like(x), x, 1.0 - x], axis=-1)
+
+        return (rgb * 255.0).astype(np.uint8)
+
+    def _is_dark_image(self, rgb_image):
+        """Estimate perceived brightness to decide text color."""
+        import numpy as np
+
+        if rgb_image.size == 0:
+            return False
+
+        r = rgb_image[..., 0].astype(np.float32)
+        g = rgb_image[..., 1].astype(np.float32)
+        b = rgb_image[..., 2].astype(np.float32)
+        luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b).mean()
+        return luminance < 120.0
+
+    def _to_pixmap(self, rgb_image, target_size):
+        height, width, _ = rgb_image.shape
+        qimg = QImage(rgb_image.data, width, height, 3 * width, QImage.Format_RGB888).copy()
+        pixmap = QPixmap.fromImage(qimg)
+        return pixmap.scaled(target_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+    def render_all_panels(self):
+        import numpy as np
+
+        global_slice = self.slice_slider.value()
+        self.slice_value_label.setText(f"{global_slice + 1} / {self.max_depth}")
+
+        for panel_index, panel in enumerate(self.panels):
+            seq_key = self.panel_assignments[panel_index]
+            if not seq_key or seq_key not in self.sequence_by_key:
+                panel.set_has_sequence(False)
+                panel.title_label.setText(f"Panel {panel_index + 1}")
+                panel.image_label.setText("Drop a sequence file here")
+                panel.image_label.setPixmap(QPixmap())
+                panel.slice_info_label.setText("No file assigned")
+                panel.apply_contrast_theme(dark_background=False)
+                continue
+
+            entry = self.sequence_by_key[seq_key]
+            volume = entry["volume"]
+            name = entry["name"]
+
+            if volume.ndim < 3:
+                panel.image_label.setText("Unsupported volume shape")
+                panel.slice_info_label.setText("Expected 3D volume")
+                continue
+
+            depth = int(volume.shape[2])
+            slice_index = min(max(0, global_slice), max(0, depth - 1))
+            slice_2d = np.asarray(volume[:, :, slice_index])
+            slice_2d = np.rot90(slice_2d)
+            normalized = self._normalize_slice(slice_2d)
+            rgb = self._apply_colormap(normalized, panel.cmap_combo.currentText())
+            panel.apply_contrast_theme(dark_background=self._is_dark_image(rgb))
+            panel.set_has_sequence(True)
+
+            panel.title_label.setText(f"Panel {panel_index + 1} • {name}")
+            panel.image_label.setText("")
+            panel.image_label.setPixmap(self._to_pixmap(rgb, panel.image_label.size()))
+            panel.slice_info_label.setText(
+                f"Slice {slice_index + 1}/{depth}  •  Shape {volume.shape[0]}x{volume.shape[1]}x{volume.shape[2]}"
+            )
+
 
 
 class SendCaseDataLoader(QThread):
@@ -204,6 +731,8 @@ class DoctorView:
         self.cases_dict = {}
         self.send_case_loader = None
         self.patients_loader = None
+        self.sequence_view_cache = {}
+        self.sequence_view_cache_limit = 3
         
     def create_buttons_container(self):
         """Create container with diagnosis buttons for doctors"""
@@ -649,7 +1178,7 @@ class DoctorView:
         self.inbox_date_from.dateChanged.connect(self._activate_inbox_date_filter)
         self.inbox_date_to.dateChanged.connect(self._activate_inbox_date_filter)
 
-        clear_date_btn = QPushButton("Clear")
+        clear_date_btn = QPushButton("❌ Clear")
         clear_date_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
         clear_date_btn.setCursor(Qt.PointingHandCursor)
         clear_date_btn.setStyleSheet(DATE_FILTER_CLEAR_BUTTON_STYLESHEET)
@@ -741,7 +1270,7 @@ class DoctorView:
             self.inbox_all_requests = requests
             self.apply_inbox_filter()
             if error_message:
-                self.parent.show_message_box("Error", error_message, "warning")
+                print(f"Inbox refresh warning: {error_message}")
 
         def on_loaded(requests, error_message):
             elapsed_ms = int((datetime.now() - refresh_started).total_seconds() * 1000)
@@ -932,6 +1461,20 @@ class DoctorView:
             if cached_request.get('id') == request_id:
                 cached_request['is_read'] = 1
                 break
+
+    def _mark_request_as_read_async(self, request_id):
+        """Mark a request as read without blocking UI interactions."""
+        if not request_id:
+            return
+
+        def worker():
+            try:
+                api_client.mark_read_doctor(request_id)
+            except Exception:
+                pass
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
 
     def _request_card_style(self, is_unread):
         if is_unread:
@@ -1264,12 +1807,148 @@ class DoctorView:
                 response.get('message', 'Failed to open file'),
                 "warning"
             )
+
+    def _download_attached_file_to_temp(self, request_id, file_type, file_index, preferred_name):
+        """Download an attached file to temp storage and return local path."""
+        import tempfile
+
+        safe_name = os.path.basename(str(preferred_name or "").strip()) or f"{file_type}_{file_index}.nii.gz"
+        if "." not in safe_name:
+            safe_name = f"{safe_name}.nii.gz"
+
+        temp_dir = os.path.join(tempfile.gettempdir(), 'DeepNeuro', 'doctor-viewer')
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_path = os.path.join(temp_dir, f"{request_id}_{file_type}_{file_index}_{safe_name}")
+
+        response, _ = api_client.download_attached_file(
+            request_id=request_id,
+            file_type=file_type,
+            user_email=self.user_email,
+            file_index=file_index,
+            save_path=temp_path,
+        )
+
+        if response.get('success'):
+            return temp_path, ""
+        return "", response.get('message', 'Failed to download attached file')
+
+    def _build_sequence_cache_key(self, request, uploaded_tests):
+        """Build a stable cache key for a case viewer payload."""
+        request_id = request.get('id')
+        refs = tuple(str(item).strip() for item in uploaded_tests if str(item).strip())
+        names = tuple(str(item).strip() for item in (request.get('uploaded_test_file_names') or []))
+        return request_id, refs, names
+
+    def _store_sequence_cache(self, cache_key, sequence_entries):
+        """Store case sequence data with a small FIFO cache."""
+        self.sequence_view_cache[cache_key] = sequence_entries
+        while len(self.sequence_view_cache) > self.sequence_view_cache_limit:
+            oldest_key = next(iter(self.sequence_view_cache))
+            self.sequence_view_cache.pop(oldest_key, None)
+
+    def _open_case_test_sequences_viewer(self, request, uploaded_tests):
+        """Open multi-panel sequence viewer for attached test files."""
+        try:
+            import nibabel as nib
+            import numpy as np
+        except Exception:
+            print("Viewer unavailable: missing nibabel/numpy")
+            return
+
+        cache_key = self._build_sequence_cache_key(request, uploaded_tests)
+        cached_entries = self.sequence_view_cache.get(cache_key)
+        if cached_entries:
+            case_info = {
+                "patient_name": request.get("patient_name", ""),
+                "patient_id": request.get("patient_id", ""),
+                "diagnosis_type": request.get("diagnosis_type", ""),
+                "priority": request.get("priority", ""),
+                "status": request.get("status", ""),
+                "scan_date": request.get("scan_date", ""),
+            }
+            viewer_dialog = CaseSequenceViewerDialog(self.parent, cached_entries, case_info=case_info)
+            viewer_dialog.exec()
+            return
+
+        stored_test_names = request.get('uploaded_test_file_names') or []
+        entries_by_index = {}
+        warnings = []
+
+        load_plan = []
+        for idx, _file_ref in enumerate(uploaded_tests):
+            display_name = ""
+            if idx < len(stored_test_names):
+                display_name = str(stored_test_names[idx]).strip()
+            if not display_name:
+                display_name = f"sequence_{idx + 1}.nii.gz"
+
+            load_plan.append((idx, display_name))
+
+        def load_one_entry(idx, display_name):
+            local_path, error_message = self._download_attached_file_to_temp(
+                request_id=request.get('id'),
+                file_type='test',
+                file_index=idx,
+                preferred_name=display_name,
+            )
+            if not local_path:
+                return idx, None, f"{display_name}: {error_message}"
+
+            try:
+                volume = nib.load(local_path).get_fdata()
+                if volume.ndim > 3:
+                    volume = volume[..., 0]
+                if volume.ndim != 3:
+                    return idx, None, f"{display_name}: unsupported volume shape {volume.shape}"
+
+                # Keep memory footprint manageable while preserving viewer quality.
+                volume = np.asarray(volume, dtype=np.float32)
+                return idx, {
+                    "key": str(idx),
+                    "name": display_name,
+                    "volume": volume,
+                }, ""
+            except Exception as exc:
+                return idx, None, f"{display_name}: failed to read volume ({exc})"
+
+        worker_count = min(4, max(1, len(load_plan)))
+        with ThreadPoolExecutor(max_workers=worker_count) as pool:
+            futures = [pool.submit(load_one_entry, idx, display_name) for idx, display_name in load_plan]
+            for future in as_completed(futures):
+                idx, entry, warning_message = future.result()
+                if entry is not None:
+                    entries_by_index[idx] = entry
+                elif warning_message:
+                    warnings.append(warning_message)
+
+        sequence_entries = [entries_by_index[idx] for idx in sorted(entries_by_index.keys())]
+
+        if not sequence_entries:
+            if warnings:
+                print("Viewer skipped unsupported files: " + " | ".join(warnings[:5]))
+            return
+
+        self._store_sequence_cache(cache_key, sequence_entries)
+
+        if warnings:
+            print("Viewer partial load: " + " | ".join(warnings[:5]))
+
+        case_info = {
+            "patient_name": request.get("patient_name", ""),
+            "patient_id": request.get("patient_id", ""),
+            "diagnosis_type": request.get("diagnosis_type", ""),
+            "priority": request.get("priority", ""),
+            "status": request.get("status", ""),
+            "scan_date": request.get("scan_date", ""),
+        }
+        viewer_dialog = CaseSequenceViewerDialog(self.parent, sequence_entries, case_info=case_info)
+        viewer_dialog.exec()
     
     def show_request_details(self, request, card_widget=None):
         """Show detailed view of a request in a dialog"""
         # Mark as read immediately when dialog opens
         if request['id']:
-            api_client.mark_read_doctor(request['id'])
+            self._mark_request_as_read_async(request['id'])
             request['is_read'] = 1
             self._mark_request_read_in_cache(request['id'])
             if self.requests_list_layout is not None:
@@ -1322,6 +2001,7 @@ class DoctorView:
         content_layout = QVBoxLayout(content_widget)
         content_layout.setSpacing(12)
         content_layout.setContentsMargins(2, 2, 2, 2)
+        visualize_test_refs = []
 
         patient_rows = [
             ("Patient Name", QLabel(clean_value(request.get('patient_name')))),
@@ -1394,6 +2074,7 @@ class DoctorView:
             uploaded_tests = [item.strip() for item in str(request.get('uploaded_test_file', '')).split('|') if item.strip()]
 
             if uploaded_tests:
+                visualize_test_refs = list(uploaded_tests)
                 tests_title = QLabel("Uploaded Test Files")
                 tests_title.setObjectName("MutedText")
                 tests_title.setStyleSheet("color: #6b7280; font-weight: 700;")
@@ -1434,27 +2115,6 @@ class DoctorView:
                     file_row.addStretch()
 
                     if request.get('id'):
-                        open_btn = QPushButton("Open")
-                        open_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
-                        open_btn.setCursor(Qt.PointingHandCursor)
-                        open_btn.setStyleSheet("""
-                            QPushButton {
-                                background: #dcfce7;
-                                color: #166534;
-                                border: none;
-                                border-radius: 4px;
-                                padding: 4px 8px;
-                            }
-                            QPushButton:hover {
-                                background: #bbf7d0;
-                            }
-                        """)
-                        open_btn.setFixedWidth(70)
-                        open_btn.clicked.connect(
-                            lambda checked, req_id=request.get('id'), f_type='test', f_idx=idx:
-                            self._open_attached_file(req_id, f_type, f_idx)
-                        )
-
                         download_btn = QPushButton("Download")
                         download_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
                         download_btn.setCursor(Qt.PointingHandCursor)
@@ -1475,7 +2135,6 @@ class DoctorView:
                             lambda checked, req_id=request.get('id'), f_type='test', f_idx=idx:
                             self._download_attached_file(req_id, f_type, f_idx)
                         )
-                        file_row.addWidget(open_btn)
                         file_row.addWidget(download_btn)
 
                     tests_grid.addWidget(file_chip, idx // 2, idx % 2)
@@ -1498,27 +2157,6 @@ class DoctorView:
                 seg_row.addWidget(seg_label)
 
                 if request.get('id'):
-                    open_btn = QPushButton("Open")
-                    open_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
-                    open_btn.setCursor(Qt.PointingHandCursor)
-                    open_btn.setStyleSheet("""
-                        QPushButton {
-                            background: #dcfce7;
-                            color: #166534;
-                            border: none;
-                            border-radius: 4px;
-                            padding: 4px 8px;
-                        }
-                        QPushButton:hover {
-                            background: #bbf7d0;
-                        }
-                    """)
-                    open_btn.setFixedWidth(70)
-                    open_btn.clicked.connect(
-                        lambda checked, req_id=request.get('id'):
-                        self._open_attached_file(req_id, 'segmentation', 0)
-                    )
-
                     download_btn = QPushButton("Download")
                     download_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
                     download_btn.setCursor(Qt.PointingHandCursor)
@@ -1539,7 +2177,6 @@ class DoctorView:
                         lambda checked, req_id=request.get('id'):
                         self._download_attached_file(req_id, 'segmentation', 0)
                     )
-                    seg_row.addWidget(open_btn)
                     seg_row.addWidget(download_btn)
 
                 seg_row.addStretch()
@@ -1551,22 +2188,49 @@ class DoctorView:
         scroll.setWidget(content_widget)
         layout.addWidget(scroll)
 
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        action_row.addStretch()
+
+        if visualize_test_refs:
+            visualize_btn = QPushButton("Visualize Test Files")
+            visualize_btn.setCursor(Qt.PointingHandCursor)
+            visualize_btn.setStyleSheet("""
+                QPushButton {
+                    background: #2563eb;
+                    color: white;
+                    border: none;
+                    border-radius: 6px;
+                    padding: 8px 16px;
+                    font-weight: 600;
+                }
+                QPushButton:hover {
+                    background: #1d4ed8;
+                }
+            """)
+            visualize_btn.clicked.connect(
+                lambda checked, req=request, refs=list(visualize_test_refs):
+                self._open_case_test_sequences_viewer(req, refs)
+            )
+            action_row.addWidget(visualize_btn)
+
         close_btn = QPushButton("Close")
-        close_btn.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        close_btn.setCursor(Qt.PointingHandCursor)
         close_btn.setStyleSheet("""
             QPushButton {
-                background: #111827;
-                color: white;
+                background: #e5e7eb;
+                color: #111827;
                 border: none;
-                border-radius: 8px;
-                padding: 8px 20px;
+                border-radius: 6px;
+                padding: 8px 16px;
             }
             QPushButton:hover {
-                background: #374151;
+                background: #d1d5db;
             }
         """)
         close_btn.clicked.connect(dialog.accept)
-        layout.addWidget(close_btn)
+        action_row.addWidget(close_btn)
+        layout.addLayout(action_row)
 
         dialog.exec()
 
