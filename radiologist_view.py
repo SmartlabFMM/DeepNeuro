@@ -440,7 +440,7 @@ class RadiologistView:
             self.all_received_requests = requests
             self.apply_radiologist_filter()
             if error_message:
-                self.parent.show_message_box("Error", error_message, "warning")
+                print(f"Radiologist refresh warning: {error_message}")
 
         def on_loaded(requests, error_message):
             elapsed_ms = int((datetime.now() - refresh_started).total_seconds() * 1000)

@@ -22,13 +22,32 @@ class APIClient:
         try:
             url = f"{self.base_url}{endpoint}"
             response = requests.request(method, url, timeout=self.timeout, **kwargs)
-            return response.json(), response.status_code
+            return self._parse_json_response(response)
         except requests.exceptions.ConnectionError:
             return {'success': False, 'message': 'Failed to connect to server'}, 500
         except requests.exceptions.Timeout:
             return {'success': False, 'message': 'Request timeout'}, 500
         except Exception as e:
             return {'success': False, 'message': f'Error: {str(e)}'}, 500
+
+    @staticmethod
+    def _parse_json_response(response, fallback_message='Request failed'):
+        """Parse JSON responses, preserving status codes for non-JSON errors."""
+        try:
+            return response.json(), response.status_code
+        except ValueError:
+            message = (response.text or '').strip() or f'{fallback_message}: {response.reason}'
+            return {'success': False, 'message': message}, response.status_code
+
+    @staticmethod
+    def _extract_filename(response, default_name='downloaded_file'):
+        """Extract filename from Content-Disposition, with a safe fallback."""
+        content_disposition = response.headers.get('content-disposition', '')
+        if 'filename=' in content_disposition:
+            filename = content_disposition.split('filename=')[-1].strip().strip('"')
+            if filename:
+                return filename
+        return default_name
     
     # Authentication endpoints
     def register(self, name, email, password, medical_id):
@@ -181,21 +200,17 @@ class APIClient:
             )
             
             if response.status_code == 200:
+                filename = self._extract_filename(response)
                 # If save_path provided, save file there
                 if save_path:
                     with open(save_path, 'wb') as f:
                         f.write(response.content)
-                    return {'success': True, 'message': f'File saved to {save_path}', 'file_path': save_path}, 200
+                    return {'success': True, 'message': f'File saved to {save_path}', 'file_path': save_path, 'filename': filename}, 200
                 else:
                     # Return file content and filename
-                    filename = response.headers.get('content-disposition', '').split('filename=')[-1].strip('"')
                     return {'success': True, 'data': response.content, 'filename': filename}, 200
-            else:
-                try:
-                    error_data = response.json()
-                    return error_data, response.status_code
-                except:
-                    return {'success': False, 'message': f'Download failed: {response.reason}'}, response.status_code
+
+            return self._parse_json_response(response, fallback_message='Download failed')
         except requests.exceptions.ConnectionError:
             return {'success': False, 'message': 'Failed to connect to server'}, 500
         except requests.exceptions.Timeout:
@@ -224,10 +239,7 @@ class APIClient:
                     timeout=self.timeout,
                 )
 
-            try:
-                return response.json(), response.status_code
-            except Exception:
-                return {'success': False, 'message': f'Upload failed: {response.reason}'}, response.status_code
+            return self._parse_json_response(response, fallback_message='Upload failed')
         except requests.exceptions.ConnectionError:
             return {'success': False, 'message': 'Failed to connect to server'}, 500
         except requests.exceptions.Timeout:
@@ -256,7 +268,7 @@ class APIClient:
             )
 
             if response.status_code == 200:
-                filename = response.headers.get('content-disposition', '').split('filename=')[-1].strip('"')
+                filename = self._extract_filename(response)
                 if save_path:
                     with open(save_path, 'wb') as file_handle:
                         for chunk in response.iter_content(chunk_size=8192):
@@ -266,10 +278,7 @@ class APIClient:
 
                 return {'success': True, 'data': response.content, 'filename': filename}, 200
 
-            try:
-                return response.json(), response.status_code
-            except Exception:
-                return {'success': False, 'message': f'Download failed: {response.reason}'}, response.status_code
+            return self._parse_json_response(response, fallback_message='Download failed')
         except requests.exceptions.ConnectionError:
             return {'success': False, 'message': 'Failed to connect to server'}, 500
         except requests.exceptions.Timeout:
