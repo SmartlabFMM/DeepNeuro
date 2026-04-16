@@ -14,7 +14,7 @@ class APIClient:
     
     def __init__(self, base_url=None):
         """Initialize API client with base URL from environment or parameter"""
-        self.base_url = base_url or os.environ.get('API_BASE_URL', 'http://localhost:5000')
+        self.base_url = base_url or os.environ.get('API_BASE_URL')
         self.timeout = int(os.environ.get('API_TIMEOUT', 10))
     
     def _make_request(self, method, endpoint, **kwargs):
