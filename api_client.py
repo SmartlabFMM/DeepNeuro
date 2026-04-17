@@ -3,6 +3,8 @@ API Client for communicating with DeepNeuro Flask Backend
 """
 import requests
 import os
+import tempfile
+from contextlib import ExitStack
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
@@ -141,6 +143,13 @@ class APIClient:
         """Get previous cases for a doctor"""
         return self._make_request('GET', f'/api/diagnosis/previous-cases/{doctor_email}')
 
+    def get_segmentation_models(self, diagnosis_type=None):
+        """Get available segmentation models, optionally filtered by diagnosis type."""
+        params = {}
+        if diagnosis_type:
+            params['diagnosis_type'] = diagnosis_type
+        return self._make_request('GET', '/api/models/segmentation', params=params)
+
     def add_patient(self, doctor_email, patient_name, patient_age, patient_sex,
                     patient_id, patient_email, phone_number, has_conditions, conditions_notes):
         """Add a patient profile for a doctor"""
@@ -240,6 +249,74 @@ class APIClient:
                 )
 
             return self._parse_json_response(response, fallback_message='Upload failed')
+        except requests.exceptions.ConnectionError:
+            return {'success': False, 'message': 'Failed to connect to server'}, 500
+        except requests.exceptions.Timeout:
+            return {'success': False, 'message': 'Request timeout'}, 500
+        except Exception as e:
+            return {'success': False, 'message': f'Error: {str(e)}'}, 500
+
+    def generate_glioma_segmentation(self, flair_file, t1_file, t1ce_file, t2_file, save_path=None):
+        """Generate a glioma segmentation from four MRI modalities."""
+        try:
+            segmentation_timeout = int(os.environ.get('GLIOMA_SEGMENTATION_TIMEOUT', 300))
+            modality_paths = {
+                'flair': flair_file,
+                't1': t1_file,
+                't1ce': t1ce_file,
+                't2': t2_file,
+            }
+
+            for modality, file_path in modality_paths.items():
+                if not file_path or not os.path.exists(file_path):
+                    return {'success': False, 'message': f'{modality.upper()} file not found'}, 400
+
+            with ExitStack() as stack:
+                files = {
+                    modality: (os.path.basename(file_path), stack.enter_context(open(file_path, 'rb')))
+                    for modality, file_path in modality_paths.items()
+                }
+
+                response = requests.post(
+                    f"{self.base_url}/api/models/glioma/segment",
+                    files=files,
+                    timeout=segmentation_timeout,
+                    stream=True,
+                )
+
+                if response.status_code == 200:
+                    filename = self._extract_filename(response, default_name='glioma_segmentation.nii.gz')
+                    if not save_path:
+                        temp_dir = os.path.join(tempfile.gettempdir(), 'DeepNeuro', 'generated_segmentations')
+                        os.makedirs(temp_dir, exist_ok=True)
+                        save_path = os.path.join(temp_dir, filename)
+                        if os.path.exists(save_path):
+                            name_root, ext = os.path.splitext(filename)
+                            if name_root.endswith('.nii') and ext == '.gz':
+                                name_root = name_root[:-4]
+                                ext = '.nii.gz'
+
+                            counter = 2
+                            while os.path.exists(save_path):
+                                save_path = os.path.join(temp_dir, f"{name_root}_{counter}{ext}")
+                                counter += 1
+                    else:
+                        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+                    with open(save_path, 'wb') as file_handle:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                file_handle.write(chunk)
+
+                    return {
+                        'success': True,
+                        'message': 'Segmentation generated successfully',
+                        'file_path': save_path,
+                        'filename': filename,
+                    }, 200
+
+                return self._parse_json_response(response, fallback_message='Segmentation generation failed')
+
         except requests.exceptions.ConnectionError:
             return {'success': False, 'message': 'Failed to connect to server'}, 500
         except requests.exceptions.Timeout:
