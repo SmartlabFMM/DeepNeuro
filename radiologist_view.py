@@ -1,12 +1,12 @@
 """Radiologist-specific landing page view"""
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-                               QFrame, QSizePolicy, QMessageBox, QDialog,
+                               QFrame, QSizePolicy, QDialog,
                                QApplication, QScrollArea, QPlainTextEdit, QLineEdit,
-                               QFileDialog, QComboBox, QStackedWidget, QDateEdit,
-                               QGridLayout)
-from PySide6.QtCore import Qt, QTimer, QThread, Signal, QDate
-from PySide6.QtGui import QFont, QPainter, QColor
+                               QFileDialog, QComboBox, QStackedWidget, QGridLayout)
+from PySide6.QtCore import Qt, QTimer, QDate
+from PySide6.QtGui import QFont
 from api_client import api_client
+from radiologist_view_parts import loaders as radiologist_view_loaders
 from shared_request_ui import (
     REQUEST_DETAILS_DIALOG_STYLESHEET,
     DATE_FILTER_CLEAR_BUTTON_STYLESHEET,
@@ -17,79 +17,8 @@ from shared_request_ui import (
     make_section_card,
 )
 from datetime import datetime
-import math
 import os
 import time
-
-
-class DotSpinner(QWidget):
-    """Small circular loading spinner inspired by Windows startup dots."""
-
-    def __init__(self, parent=None, dot_count=8, color="#3b82f6"):
-        super().__init__(parent)
-        self.dot_count = dot_count
-        self.active_index = 0
-        self.base_color = QColor(color)
-        self.timer = QTimer(self)
-        self.timer.setInterval(90)
-        self.timer.timeout.connect(self._advance)
-        self.setFixedSize(56, 56)
-
-    def start(self):
-        if not self.timer.isActive():
-            self.timer.start()
-
-    def stop(self):
-        if self.timer.isActive():
-            self.timer.stop()
-        self.active_index = 0
-        self.update()
-
-    def _advance(self):
-        self.active_index = (self.active_index + 1) % self.dot_count
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(Qt.NoPen)
-
-        center_x = self.width() / 2
-        center_y = self.height() / 2
-        orbit_radius = min(self.width(), self.height()) * 0.32
-        dot_radius = max(2.6, min(self.width(), self.height()) * 0.07)
-
-        for i in range(self.dot_count):
-            distance = (i - self.active_index) % self.dot_count
-            alpha = max(35, 255 - distance * 28)
-            color = QColor(self.base_color)
-            color.setAlpha(alpha)
-            painter.setBrush(color)
-
-            angle = (360 / self.dot_count) * i
-            radians = math.radians(angle)
-            x = center_x + orbit_radius * math.cos(radians)
-            y = center_y + orbit_radius * math.sin(radians)
-            painter.drawEllipse(int(x - dot_radius), int(y - dot_radius), int(dot_radius * 2), int(dot_radius * 2))
-
-
-class RadiologistRequestsDataLoader(QThread):
-    """Load radiologist requests without blocking the UI thread."""
-    loaded = Signal(object, str)
-
-    def __init__(self, radiologist_email):
-        super().__init__()
-        self.radiologist_email = radiologist_email
-
-    def run(self):
-        try:
-            response, _ = api_client.get_radiologist_requests(self.radiologist_email)
-            if response.get('success'):
-                self.loaded.emit(response.get('requests', []), "")
-            else:
-                self.loaded.emit([], response.get('message', 'Unable to load requests right now.'))
-        except Exception:
-            self.loaded.emit([], 'Unable to load requests right now.')
 
 
 class RadiologistView:
@@ -463,7 +392,7 @@ class RadiologistView:
             except RuntimeError:
                 self.radiologist_requests_loader = None
 
-        self.radiologist_requests_loader = RadiologistRequestsDataLoader(self.user_email)
+        self.radiologist_requests_loader = radiologist_view_loaders.RadiologistRequestsDataLoader(self.user_email)
 
         def finish_refresh(requests, error_message):
             if refresh_token != self.radiologist_refresh_token:
@@ -516,7 +445,7 @@ class RadiologistView:
         loading_layout.setSpacing(8)
         loading_layout.setAlignment(Qt.AlignCenter)
 
-        self.radiologist_loading_spinner = DotSpinner()
+        self.radiologist_loading_spinner = radiologist_view_loaders.DotSpinner()
         self.radiologist_loading_spinner.start()
 
         loading_label = QLabel("Loading requests...")
@@ -1151,8 +1080,29 @@ class RadiologistView:
                 border: 1px solid #d1d5db;
                 border-radius: 7px;
                 padding: 7px 10px;
+                color: #111827;
+            }
+            QComboBox:focus {
+                border: 1px solid #0ea5e9;
+            }
+            QComboBox QAbstractItemView {
+                background: white;
+                color: #111827;
+                border: 1px solid #d1d5db;
+                selection-background-color: #dbeafe;
+                selection-color: #111827;
+            }
+            QComboBox QAbstractItemView::item {
+                color: #111827;
+                padding: 6px 8px;
             }
         """)
+
+        request_diagnosis = str(request.get('diagnosis_type', '') or '').strip()
+        if request_diagnosis:
+            diagnosis_index = diagnosis_type.findText(request_diagnosis)
+            if diagnosis_index >= 0:
+                diagnosis_type.setCurrentIndex(diagnosis_index)
 
         selected_test_files = []
 
@@ -1168,7 +1118,7 @@ class RadiologistView:
         files_section_layout.setContentsMargins(10, 10, 10, 10)
         files_section_layout.setSpacing(8)
 
-        files_section_title = QLabel("Uploaded Test Files")
+        files_section_title = QLabel("Uploaded MRI Files")
         files_section_title.setStyleSheet("color: #374151; font-weight: 700;")
 
         files_list_widget = QWidget()
@@ -1193,8 +1143,8 @@ class RadiologistView:
                 files_list_layout.addWidget(empty_files_label, 0, 0, 1, 2)
                 return
 
-            if len(selected_test_files) != 4:
-                warning_label = QLabel("Please select exactly 4 files to generate glioma segmentation.")
+            if len(selected_test_files) not in (3, 4):
+                warning_label = QLabel("Please select 3 or 4 MRI files.")
                 warning_label.setStyleSheet("color: #b45309; font-weight: 600; padding: 8px;")
                 files_list_layout.addWidget(warning_label, 0, 0, 1, 2)
                 return
@@ -1206,7 +1156,7 @@ class RadiologistView:
                 chip.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
                 files_list_layout.addWidget(chip, row, col)
 
-        upload_tests_btn = QPushButton("Upload 4 Glioma MRI Files")
+        upload_tests_btn = QPushButton("Upload MRI Files")
         upload_tests_btn.setCursor(Qt.PointingHandCursor)
         upload_tests_btn.setStyleSheet("""
             QPushButton {
@@ -1224,9 +1174,9 @@ class RadiologistView:
 
         segmentation_file_input = QLineEdit()
         segmentation_file_input.setReadOnly(True)
-        segmentation_file_input.setPlaceholderText("Generated segmentation will appear here")
+        segmentation_file_input.setPlaceholderText("Optional segmentation file will appear here")
 
-        generate_seg_btn = QPushButton("Generate Segmentation")
+        generate_seg_btn = QPushButton("Generate Segmentation (Optional)")
         generate_seg_btn.setCursor(Qt.PointingHandCursor)
         generate_seg_btn.setStyleSheet("""
             QPushButton {
@@ -1245,15 +1195,15 @@ class RadiologistView:
         def pick_test_files():
             file_paths, _ = QFileDialog.getOpenFileNames(
                 dialog,
-                "Upload 4 Glioma MRI Files",
+                "Upload MRI Files",
                 "",
                 "All files (*.*)"
             )
             if file_paths:
-                if len(file_paths) != 4:
+                if len(file_paths) not in (3, 4):
                     self.parent.show_message_box(
                         "Missing Information",
-                        "Please select exactly 4 files: FLAIR, T1, T1CE, and T2.",
+                        "Please select 3 or 4 MRI files.",
                         "warning"
                     )
                     return
@@ -1265,15 +1215,15 @@ class RadiologistView:
             if diagnosis_type.currentText() != 'Glioma Tumor':
                 self.parent.show_message_box(
                     "Unsupported Diagnosis Type",
-                    "The glioma segmentation model is only available for Glioma Tumor requests.",
+                    "Segmentation generation is only available for Glioma Tumor requests.",
                     "warning"
                 )
                 return
 
-            if len(selected_test_files) != 4:
+            if len(selected_test_files) not in (3, 4):
                 self.parent.show_message_box(
                     "Missing Information",
-                    "Please upload exactly 4 MRI files before generating segmentation.",
+                    "Please upload 3 or 4 MRI files before generating segmentation.",
                     "warning"
                 )
                 return
@@ -1416,17 +1366,20 @@ class RadiologistView:
                 self.parent.show_message_box("Missing Information", "Please choose diagnosis type.", "warning")
                 return
             if not selected_test_files:
-                self.parent.show_message_box("Missing Information", "Please upload the 4 MRI files first.", "warning")
+                self.parent.show_message_box("Missing Information", "Please upload 3 or 4 MRI files first.", "warning")
                 return
 
-            if len(selected_test_files) != 4:
-                self.parent.show_message_box("Missing Information", "Please upload exactly 4 MRI files.", "warning")
+            if len(selected_test_files) not in (3, 4):
+                self.parent.show_message_box("Missing Information", "Please upload 3 or 4 MRI files.", "warning")
                 return
 
             segmentation_file = segmentation_file_input.text().strip()
             if not segmentation_file:
-                self.parent.show_message_box("Missing Information", "Please generate the segmentation first.", "warning")
-                return
+                self.parent.show_message_box(
+                    "Segmentation Not Generated",
+                    "No segmentation file has been generated. The case will be sent without it.",
+                    "warning"
+                )
 
             test_file_ids, segmentation_file_id = self._store_case_attachments(selected_test_files, segmentation_file)
             if not test_file_ids:
