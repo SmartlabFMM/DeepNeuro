@@ -53,15 +53,210 @@ class DraggableSequenceList(QListWidget):
         return mime_data
 
 
+class DraggableLayerInfoBox(QFrame):
+    """Draggable info box used to reorder and remove displayed files inside a panel."""
+
+    MIME_TYPE = "application/x-deepneuro-layer-role"
+
+    def __init__(self, panel_index, layer_role, on_swap_requested, on_close_requested=None, parent=None):
+        super().__init__(parent)
+        self.panel_index = panel_index
+        self.layer_role = layer_role
+        self.on_swap_requested = on_swap_requested
+        self.on_close_requested = on_close_requested
+        self._drag_start_pos = None
+        self.setAcceptDrops(True)
+        self.setCursor(Qt.OpenHandCursor)
+        self.setStyleSheet("""
+            QFrame {
+                background: rgba(255, 255, 255, 0.96);
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 5, 8, 5)
+        layout.setSpacing(0)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+
+        self.info_label = DraggableLayerInfoLabel(panel_index, layer_role, on_swap_requested, self)
+        self.info_label.setWordWrap(False)
+        self.info_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.info_label.setMinimumWidth(0)
+        self.info_label.setStyleSheet("color: #0f172a; font-size: 11px; font-weight: 700;")
+
+        self.close_button = QPushButton("×")
+        self.close_button.setFixedSize(18, 18)
+        self.close_button.setCursor(Qt.PointingHandCursor)
+        self.close_button.setFlat(True)
+        self.close_button.setStyleSheet("""
+            QPushButton {
+                color: #64748b;
+                border: none;
+                border-radius: 9px;
+                font-size: 13px;
+                font-weight: 700;
+                padding: 0px;
+                background: transparent;
+            }
+            QPushButton:hover {
+                color: #dc2626;
+                background: rgba(220, 38, 38, 0.08);
+            }
+            QPushButton:pressed {
+                color: #b91c1c;
+                background: rgba(220, 38, 38, 0.16);
+            }
+        """)
+        self.close_button.clicked.connect(self._handle_close_clicked)
+
+        row.addWidget(self.info_label, 1)
+        row.addWidget(self.close_button, 0, Qt.AlignRight | Qt.AlignVCenter)
+        layout.addLayout(row)
+
+    def set_text(self, info_text):
+        self.info_label.setText(info_text)
+
+    def set_close_visible(self, visible):
+        self.close_button.setVisible(bool(visible))
+
+    def _handle_close_clicked(self):
+        if callable(self.on_close_requested):
+            self.on_close_requested(self.panel_index, self.layer_role)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_start_pos = event.position().toPoint()
+            self.setCursor(Qt.ClosedHandCursor)
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_start_pos is None:
+            super().mouseMoveEvent(event)
+            return
+        if not (event.buttons() & Qt.LeftButton):
+            super().mouseMoveEvent(event)
+            return
+
+        if (event.position().toPoint() - self._drag_start_pos).manhattanLength() < QApplication.startDragDistance():
+            super().mouseMoveEvent(event)
+            return
+
+        from PySide6.QtGui import QDrag
+
+        drag = QDrag(self)
+        mime_data = QMimeData()
+        mime_data.setData(self.MIME_TYPE, self.layer_role.encode("utf-8"))
+        drag.setMimeData(mime_data)
+        drag.exec(Qt.MoveAction)
+        self._drag_start_pos = None
+        self.setCursor(Qt.OpenHandCursor)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(self.MIME_TYPE):
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dropEvent(self, event):
+        if not event.mimeData().hasFormat(self.MIME_TYPE):
+            event.ignore()
+            return
+
+        source_role = bytes(event.mimeData().data(self.MIME_TYPE)).decode("utf-8")
+        if source_role and source_role != self.layer_role and callable(self.on_swap_requested):
+            self.on_swap_requested(self.panel_index)
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def mouseReleaseEvent(self, event):
+        self._drag_start_pos = None
+        self.setCursor(Qt.OpenHandCursor)
+        super().mouseReleaseEvent(event)
+
+
+class DraggableLayerInfoLabel(QLabel):
+    """Draggable label used for the visible left/right file text."""
+
+    MIME_TYPE = DraggableLayerInfoBox.MIME_TYPE
+
+    def __init__(self, panel_index, layer_role, on_swap_requested, parent=None):
+        super().__init__(parent)
+        self.panel_index = panel_index
+        self.layer_role = layer_role
+        self.on_swap_requested = on_swap_requested
+        self._drag_start_pos = None
+        self.setAcceptDrops(True)
+        self.setCursor(Qt.OpenHandCursor)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_start_pos = event.position().toPoint()
+            self.setCursor(Qt.ClosedHandCursor)
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_start_pos is None:
+            super().mouseMoveEvent(event)
+            return
+        if not (event.buttons() & Qt.LeftButton):
+            super().mouseMoveEvent(event)
+            return
+
+        if (event.position().toPoint() - self._drag_start_pos).manhattanLength() < QApplication.startDragDistance():
+            super().mouseMoveEvent(event)
+            return
+
+        from PySide6.QtGui import QDrag
+
+        drag = QDrag(self)
+        mime_data = QMimeData()
+        mime_data.setData(self.MIME_TYPE, self.layer_role.encode("utf-8"))
+        drag.setMimeData(mime_data)
+        drag.exec(Qt.MoveAction)
+        self._drag_start_pos = None
+        self.setCursor(Qt.OpenHandCursor)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(self.MIME_TYPE):
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dropEvent(self, event):
+        if not event.mimeData().hasFormat(self.MIME_TYPE):
+            event.ignore()
+            return
+
+        source_role = bytes(event.mimeData().data(self.MIME_TYPE)).decode("utf-8")
+        if source_role and source_role != self.layer_role and callable(self.on_swap_requested):
+            self.on_swap_requested(self.panel_index)
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def mouseReleaseEvent(self, event):
+        self._drag_start_pos = None
+        self.setCursor(Qt.OpenHandCursor)
+        super().mouseReleaseEvent(event)
+
+
 class SequenceDropPanel(QFrame):
     """Drop target panel that displays one sequence slice with colormap."""
 
-    def __init__(self, panel_index, on_drop_file, on_colormap_changed, on_scroll_slice, parent=None):
+    def __init__(self, panel_index, on_drop_file, on_colormap_changed, on_scroll_slice, on_swap_layers, on_close_layer, parent=None):
         super().__init__(parent)
         self.panel_index = panel_index
         self.on_drop_file = on_drop_file
         self.on_colormap_changed = on_colormap_changed
         self.on_scroll_slice = on_scroll_slice
+        self.on_swap_layers = on_swap_layers
+        self.on_close_layer = on_close_layer
         self.setAcceptDrops(True)
         self.setStyleSheet("""
             QFrame {
@@ -72,11 +267,11 @@ class SequenceDropPanel(QFrame):
         """)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(6)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(8)
 
         header = QHBoxLayout()
-        header.setSpacing(6)
+        header.setSpacing(8)
         self.title_label = QLabel(f"Panel {panel_index + 1}")
         self.title_label.setStyleSheet("color: #334155; font-weight: 700;")
 
@@ -90,7 +285,6 @@ class SequenceDropPanel(QFrame):
             "Plasma",
             "Magma",
             "Bone",
-            "Spring",
         ])
         self.cmap_combo.setCurrentText("Grayscale")
         self.cmap_combo.setFixedWidth(120)
@@ -113,20 +307,57 @@ class SequenceDropPanel(QFrame):
                 background: white;
             }
         """)
-        self.image_label.setMinimumHeight(220)
+        self.image_label.setMinimumHeight(190)
+        self.image_label.setMaximumHeight(520)
 
         self.slice_info_label = QLabel("No file assigned")
         self.slice_info_label.setAlignment(Qt.AlignRight)
+        self.slice_info_label.setWordWrap(False)
         self.slice_info_label.setStyleSheet("color: #64748b; font-size: 11px;")
+
+        self.layer_info_container = QWidget()
+        self.layer_info_container.setVisible(False)
+        self.layer_info_container.setStyleSheet("background: transparent; border: none;")
+        layer_info_layout = QVBoxLayout(self.layer_info_container)
+        layer_info_layout.setContentsMargins(0, 0, 0, 0)
+        layer_info_layout.setSpacing(4)
+
+        self.top_info_box = DraggableLayerInfoBox(panel_index, "top", self._toggle_layer_order, self._close_layer)
+        self.bottom_info_box = DraggableLayerInfoBox(panel_index, "bottom", self._toggle_layer_order, self._close_layer)
+        layer_info_layout.addWidget(self.top_info_box)
+        layer_info_layout.addWidget(self.bottom_info_box)
 
         root.addLayout(header)
         root.addWidget(self.image_label, 1)
+        root.addWidget(self.layer_info_container)
         root.addWidget(self.slice_info_label)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumSize(0, 0)
         self.apply_contrast_theme(dark_background=False)
 
     def set_has_sequence(self, has_sequence):
         """Show colormap options only when a sequence is assigned."""
         self.cmap_combo.setVisible(bool(has_sequence))
+
+    def show_layer_boxes(self, show_boxes):
+        self.layer_info_container.setVisible(bool(show_boxes))
+        self.slice_info_label.setVisible(not bool(show_boxes))
+
+    def set_layer_info(self, top_info, bottom_info, show_boxes):
+        self.top_info_box.set_text(top_info)
+        self.top_info_box.set_close_visible(bool(top_info))
+        self.bottom_info_box.set_text(bottom_info)
+        self.bottom_info_box.set_close_visible(bool(bottom_info))
+        self.bottom_info_box.setVisible(bool(bottom_info))
+        self.show_layer_boxes(show_boxes)
+
+    def _toggle_layer_order(self, panel_index):
+        if callable(self.on_swap_layers):
+            self.on_swap_layers(panel_index)
+
+    def _close_layer(self, panel_index, layer_role):
+        if callable(self.on_close_layer):
+            self.on_close_layer(panel_index, layer_role)
 
     def apply_contrast_theme(self, dark_background):
         """Auto-adjust text colors to maintain contrast against image background."""
@@ -160,6 +391,22 @@ class SequenceDropPanel(QFrame):
         """)
         self.title_label.setStyleSheet(f"color: {title_color}; font-weight: 700;")
         self.slice_info_label.setStyleSheet(f"color: {info_color}; font-size: 11px;")
+        self.top_info_box.setStyleSheet(f"""
+            QFrame {{
+                background: {combo_bg};
+                border: 1px solid {combo_border};
+                border-radius: 8px;
+            }}
+        """)
+        self.bottom_info_box.setStyleSheet(f"""
+            QFrame {{
+                background: {combo_bg};
+                border: 1px solid {combo_border};
+                border-radius: 8px;
+            }}
+        """)
+        self.top_info_box.info_label.setStyleSheet(f"color: {info_color}; font-size: 11px; font-weight: 700;")
+        self.bottom_info_box.info_label.setStyleSheet(f"color: {info_color}; font-size: 11px; font-weight: 700;")
         self.image_label.setStyleSheet(f"""
             QLabel {{
                 color: {placeholder_color};
@@ -215,64 +462,209 @@ class SequenceDropPanel(QFrame):
 class CaseSequenceViewerDialog(QDialog):
     """Visualize multiple 3D test sequences with synchronized scrolling."""
 
-    def __init__(self, parent, sequence_entries, case_info=None):
+    def __init__(
+        self,
+        parent,
+        sequence_entries,
+        case_info=None,
+        scan_date_options=None,
+        current_scan_option_id=None,
+        on_scan_date_selected=None,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Case Sequence Viewer")
         self.setMinimumSize(1250, 780)
+        self.setSizeGripEnabled(True)
         self.case_info = case_info or {}
+        self.scan_date_options = list(scan_date_options or [])
+        self.current_scan_option_id = str(current_scan_option_id or "")
+        self.on_scan_date_selected = on_scan_date_selected
+        self._scan_change_in_progress = False
+        self.scan_date_combo = None
+        self.case_info_rows = {}
 
-        self.sequence_by_key = {
-            str(entry["key"]): {
-                "name": str(entry["name"]),
-                "volume": entry["volume"],
-            }
-            for entry in sequence_entries
-        }
-        self.panel_assignments = [None, None, None, None]
+        self.sequence_by_key = {}
+        self.current_sequence_keys = []
+        self.panel_assignments = [self._empty_panel_assignment() for _ in range(4)]
         self.panels = []
-
-        max_depth = 1
-        for entry in self.sequence_by_key.values():
-            depth = int(entry["volume"].shape[2]) if entry["volume"].ndim >= 3 else 1
-            max_depth = max(max_depth, depth)
-        self.max_depth = max_depth
+        self.max_depth = 1
+        self._set_sequence_entries(sequence_entries, keep_assignments=False)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(10)
+        root.setContentsMargins(14, 14, 14, 14)
+        root.setSpacing(12)
 
         splitter = QSplitter(Qt.Horizontal)
+        splitter.setHandleWidth(10)
+        splitter.setChildrenCollapsible(False)
 
         sidebar = QFrame()
-        sidebar.setMinimumWidth(340)
+        sidebar.setObjectName("ViewerSidebar")
+        sidebar.setFixedWidth(300)
         sidebar.setStyleSheet("""
-            QFrame {
-                background: #0f172a;
+            QFrame#ViewerSidebar {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #081223, stop:1 #0f172a);
                 border: 1px solid #1e293b;
+                border-radius: 14px;
+            }
+            QFrame#SidebarCard {
+                background: rgba(248, 250, 252, 0.98);
+                border: 1px solid #dbe2ea;
+                border-radius: 12px;
+            }
+            QFrame#SidebarDarkCard {
+                background: rgba(15, 23, 42, 0.78);
+                border: 1px solid #334155;
+                border-radius: 12px;
+            }
+            QLabel#SidebarEyebrow {
+                color: #93c5fd;
+                font-size: 10px;
+                font-weight: 700;
+                letter-spacing: 0.8px;
+            }
+            QLabel#SidebarTitle {
+                color: #f8fafc;
+                font-size: 18px;
+                font-weight: 800;
+            }
+            QLabel#SidebarSubtitle {
+                color: #cbd5e1;
+                font-size: 12px;
+            }
+            QLabel#CardTitle {
+                color: #0f172a;
+                font-size: 13px;
+                font-weight: 800;
+            }
+            QLabel#DarkCardTitle {
+                color: #f8fafc;
+                font-size: 13px;
+                font-weight: 800;
+            }
+            QLabel#InfoRow {
+                color: #334155;
+                font-size: 12px;
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                padding: 4px 7px;
+            }
+            QLabel#FilesHint {
+                color: #94a3b8;
+                font-size: 11px;
+            }
+            QListWidget {
+                background: rgba(255, 255, 255, 0.98);
+                border: 1px solid #cbd5e1;
                 border-radius: 10px;
+                padding: 4px;
+                color: #0f172a;
+            }
+            QListWidget::item {
+                padding: 4px 6px;
+                border-radius: 6px;
+                margin: 0px;
+                color: #0f172a;
+            }
+            QListWidget::item:hover {
+                background: #e0f2fe;
+            }
+            QListWidget::item:selected {
+                background: #bae6fd;
+                color: #0c4a6e;
+                font-weight: 700;
+            }
+            QScrollBar:vertical {
+                background: transparent;
+                width: 10px;
+                margin: 3px 0 3px 0;
+            }
+            QScrollBar::handle:vertical {
+                background: #94a3b8;
+                min-height: 24px;
+                border-radius: 5px;
+            }
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {
+                height: 0px;
             }
         """)
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(10, 10, 10, 10)
-        sidebar_layout.setSpacing(10)
+        sidebar_layout.setContentsMargins(8, 8, 8, 8)
+        sidebar_layout.setSpacing(8)
+
+        sidebar_header = QFrame()
+        sidebar_header.setStyleSheet("background: transparent; border: none;")
+        sidebar_header_layout = QVBoxLayout(sidebar_header)
+        sidebar_header_layout.setContentsMargins(4, 4, 4, 4)
+        sidebar_header_layout.setSpacing(3)
+
+        sidebar_eyebrow = QLabel("VISUALIZATION")
+        sidebar_eyebrow.setObjectName("SidebarEyebrow")
+        sidebar_title = QLabel("Case Navigator")
+        sidebar_title.setObjectName("SidebarTitle")
+        sidebar_subtitle = QLabel("Review metadata and drag test files from the selected scan date into any panel")
+        sidebar_subtitle.setObjectName("SidebarSubtitle")
+        sidebar_subtitle.setWordWrap(True)
+
+        sidebar_header_layout.addWidget(sidebar_eyebrow)
+        sidebar_header_layout.addWidget(sidebar_title)
+        sidebar_header_layout.addWidget(sidebar_subtitle)
 
         case_card = QFrame()
-        case_card.setMinimumHeight(260)
-        case_card.setStyleSheet("""
-            QFrame {
-                background: #f8fafc;
-                border: 1px solid #dbe2ea;
-                border-radius: 8px;
-            }
-        """)
+        case_card.setObjectName("SidebarCard")
+        case_card.setMinimumHeight(360)
         case_layout = QVBoxLayout(case_card)
-        case_layout.setContentsMargins(10, 10, 10, 10)
+        case_layout.setContentsMargins(8, 8, 8, 8)
         case_layout.setSpacing(6)
 
         case_title = QLabel("Case Information")
-        case_title.setFont(QFont("Segoe UI", 12, QFont.Bold))
-        case_title.setStyleSheet("color: #0f172a; font-weight: 700;")
+        case_title.setObjectName("CardTitle")
         case_layout.addWidget(case_title)
+
+        scan_date_title = QLabel("Scan Date")
+        scan_date_title.setStyleSheet("color: #334155; font-size: 11px; font-weight: 700;")
+        case_layout.addWidget(scan_date_title)
+
+        self.scan_date_combo = QComboBox()
+        self.scan_date_combo.setStyleSheet("""
+            QComboBox {
+                background: #ffffff;
+                color: #0f172a;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                padding: 6px 8px;
+                font-weight: 600;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 22px;
+                border-left: 1px solid #e2e8f0;
+                background: #f8fafc;
+                border-top-right-radius: 8px;
+                border-bottom-right-radius: 8px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                width: 0px;
+                height: 0px;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid #475569;
+            }
+            QComboBox QAbstractItemView {
+                background: #ffffff;
+                color: #0f172a;
+                border: 1px solid #cbd5e1;
+                selection-background-color: #e0f2fe;
+                selection-color: #0c4a6e;
+            }
+        """)
+        case_layout.addWidget(self.scan_date_combo)
+        self._populate_scan_date_options()
 
         case_rows = [
             ("Patient", clean_value(self.case_info.get("patient_name"))),
@@ -280,63 +672,35 @@ class CaseSequenceViewerDialog(QDialog):
             ("Diagnosis", clean_value(self.case_info.get("diagnosis_type"))),
             ("Priority", clean_value(self.case_info.get("priority"))),
             ("Status", clean_value(self.case_info.get("status"))),
-            ("Scan Date", clean_value(self.case_info.get("scan_date"))),
         ]
 
         for label_text, value_text in case_rows:
-            row = QLabel(
-                f"<span style='color:#64748b; font-weight:600;'>{label_text}:</span> "
-                f"<span style='color:#0f172a; font-weight:700;'>{value_text}</span>"
-            )
+            row = self._make_case_info_row(label_text, value_text)
+            row.setObjectName("InfoRow")
             row.setWordWrap(True)
             case_layout.addWidget(row)
+            self.case_info_rows[label_text] = row
 
         files_info_card = QFrame()
-        files_info_card.setStyleSheet("""
-            QFrame {
-                background: #111827;
-                border: 1px solid #334155;
-                border-radius: 8px;
-            }
-        """)
+        files_info_card.setObjectName("SidebarDarkCard")
+        files_info_card.setMinimumHeight(170)
         files_info_layout = QVBoxLayout(files_info_card)
-        files_info_layout.setContentsMargins(10, 10, 10, 10)
-        files_info_layout.setSpacing(4)
+        files_info_layout.setContentsMargins(8, 8, 8, 8)
+        files_info_layout.setSpacing(5)
 
-        files_title = QLabel("Test Files")
-        files_title.setFont(QFont("Segoe UI", 13, QFont.Bold))
-        files_title.setStyleSheet("color: #f8fafc; font-weight: 700;")
-        files_help = QLabel("Drag any file onto one of the 4 panels")
+        files_title = QLabel(f"Test Files ({len(self.sequence_by_key)})")
+        files_title.setObjectName("DarkCardTitle")
+        files_help = QLabel("Drag any file from this scan date onto one of the 4 panels")
         files_help.setWordWrap(True)
-        files_help.setStyleSheet("color: #cbd5e1;")
-        files_help.setMinimumHeight(34)
+        files_help.setObjectName("FilesHint")
+        files_help.setMinimumHeight(16)
 
         files_info_layout.addWidget(files_title)
 
         self.file_list = DraggableSequenceList()
-        self.file_list.setStyleSheet("""
-            QListWidget {
-                background: white;
-                border: 1px solid #dbe2ea;
-                border-radius: 8px;
-                padding: 4px;
-                color: #0f172a;
-            }
-            QListWidget::item {
-                padding: 8px;
-                border-radius: 6px;
-                margin: 2px;
-                color: #0f172a;
-            }
-            QListWidget::item:hover {
-                background: #f1f5f9;
-            }
-            QListWidget::item:selected {
-                background: #e0f2fe;
-                color: #0f172a;
-            }
-        """)
-        self.file_list.setMinimumHeight(240)
+        self.file_list.setMinimumHeight(110)
+        self.file_list.setSpacing(1)
+        self.file_list.setUniformItemSizes(True)
 
         files_info_layout.addWidget(self.file_list, 1)
         files_info_layout.addWidget(files_help)
@@ -347,31 +711,58 @@ class CaseSequenceViewerDialog(QDialog):
             item.setToolTip(entry['name'])
             self.file_list.addItem(item)
 
-        sidebar_layout.addWidget(case_card, 3)
+        sidebar_layout.addWidget(sidebar_header)
+        sidebar_layout.addWidget(case_card, 5)
+        sidebar_layout.addSpacing(8)
         sidebar_layout.addWidget(files_info_card, 2)
+        sidebar_layout.addStretch(1)
 
         viewer_container = QFrame()
         viewer_layout = QVBoxLayout(viewer_container)
-        viewer_layout.setContentsMargins(0, 0, 0, 0)
-        viewer_layout.setSpacing(8)
+        viewer_layout.setContentsMargins(8, 4, 8, 4)
+        viewer_layout.setSpacing(12)
 
-        panel_grid = QGridLayout()
-        panel_grid.setContentsMargins(0, 0, 0, 0)
-        panel_grid.setHorizontalSpacing(8)
-        panel_grid.setVerticalSpacing(8)
-
-        for panel_index in range(4):
+        def create_panel(panel_index):
             panel = SequenceDropPanel(
                 panel_index,
                 self.assign_sequence_to_panel,
                 self.on_panel_colormap_changed,
                 self.adjust_slice,
+                self.swap_panel_layers,
+                self.clear_panel_layer,
             )
+            panel.setMinimumSize(300, 260)
             self.panels.append(panel)
-            panel_grid.addWidget(panel, panel_index // 2, panel_index % 2)
+            return panel
+
+        top_row_splitter = QSplitter(Qt.Horizontal)
+        top_row_splitter.setHandleWidth(10)
+        top_row_splitter.setChildrenCollapsible(False)
+        top_row_splitter.addWidget(create_panel(0))
+        top_row_splitter.addWidget(create_panel(1))
+        top_row_splitter.setStretchFactor(0, 1)
+        top_row_splitter.setStretchFactor(1, 1)
+
+        bottom_row_splitter = QSplitter(Qt.Horizontal)
+        bottom_row_splitter.setHandleWidth(10)
+        bottom_row_splitter.setChildrenCollapsible(False)
+        bottom_row_splitter.addWidget(create_panel(2))
+        bottom_row_splitter.addWidget(create_panel(3))
+        bottom_row_splitter.setStretchFactor(0, 1)
+        bottom_row_splitter.setStretchFactor(1, 1)
+
+        panel_splitter = QSplitter(Qt.Vertical)
+        panel_splitter.setHandleWidth(10)
+        panel_splitter.setChildrenCollapsible(False)
+        panel_splitter.addWidget(top_row_splitter)
+        panel_splitter.addWidget(bottom_row_splitter)
+        panel_splitter.setStretchFactor(0, 1)
+        panel_splitter.setStretchFactor(1, 1)
+        panel_splitter.setSizes([1, 1])
 
         controls = QHBoxLayout()
-        controls.setSpacing(10)
+        controls.setContentsMargins(4, 4, 4, 2)
+        controls.setSpacing(12)
 
         slice_text_label = QLabel("Slice")
         slice_text_label.setStyleSheet("color: #e2e8f0; font-weight: 600;")
@@ -387,35 +778,179 @@ class CaseSequenceViewerDialog(QDialog):
         self.slice_value_label.setStyleSheet("color: #e2e8f0; font-weight: 600;")
         controls.addWidget(self.slice_value_label)
 
-        viewer_layout.addLayout(panel_grid, 1)
+        viewer_layout.addWidget(panel_splitter, 1)
         viewer_layout.addLayout(controls)
 
         splitter.addWidget(sidebar)
         splitter.addWidget(viewer_container)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
+        splitter.setSizes([300, 940])
 
         root.addWidget(splitter, 1)
 
-        close_btn = QPushButton("Close Viewer")
-        close_btn.setCursor(Qt.PointingHandCursor)
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background: #0f172a;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 8px 16px;
-                font-weight: 700;
-            }
-            QPushButton:hover {
-                background: #1e293b;
-            }
-        """)
-        close_btn.clicked.connect(self.accept)
-        root.addWidget(close_btn, alignment=Qt.AlignRight)
-
         self.render_all_panels()
+
+    def _make_case_info_row(self, label_text, value_text):
+        return QLabel(
+            f"<span style='color:#64748b; font-weight:700;'>{clean_value(label_text)}</span><br>"
+            f"<span style='color:#0f172a; font-weight:700;'>{clean_value(value_text)}</span>"
+        )
+
+    def _set_case_info(self, case_info):
+        self.case_info = dict(case_info or {})
+        mapping = {
+            "Patient": self.case_info.get("patient_name", ""),
+            "Patient ID": self.case_info.get("patient_id", ""),
+            "Diagnosis": self.case_info.get("diagnosis_type", ""),
+            "Priority": self.case_info.get("priority", ""),
+            "Status": self.case_info.get("status", ""),
+        }
+        for label_text, value_text in mapping.items():
+            row = self.case_info_rows.get(label_text)
+            if row is not None:
+                row.setText(
+                    f"<span style='color:#64748b; font-weight:700;'>{clean_value(label_text)}</span><br>"
+                    f"<span style='color:#0f172a; font-weight:700;'>{clean_value(value_text)}</span>"
+                )
+
+    def _populate_scan_date_options(self):
+        if self.scan_date_combo is None:
+            return
+
+        self.scan_date_combo.blockSignals(True)
+        self.scan_date_combo.clear()
+
+        if self.scan_date_options:
+            for option in self.scan_date_options:
+                option_id = str(option.get("id", ""))
+                option_label = self._format_scan_date_with_time(option.get("request") or {})
+                self.scan_date_combo.addItem(option_label, option_id)
+
+            target_index = -1
+            if self.current_scan_option_id:
+                for i in range(self.scan_date_combo.count()):
+                    if str(self.scan_date_combo.itemData(i) or "") == self.current_scan_option_id:
+                        target_index = i
+                        break
+            if target_index < 0:
+                target_index = 0
+            self.scan_date_combo.setCurrentIndex(target_index)
+        else:
+            scan_date_value = self._format_scan_date_with_time(self.case_info)
+            self.scan_date_combo.addItem(scan_date_value, "")
+            self.scan_date_combo.setCurrentIndex(0)
+
+        self.scan_date_combo.setEnabled(self.scan_date_combo.count() > 1)
+        self.scan_date_combo.blockSignals(False)
+        self.scan_date_combo.currentIndexChanged.connect(self._on_scan_date_changed)
+
+    def _set_sequence_entries(self, sequence_entries, keep_assignments=True):
+        current_entries = {
+            str(entry["key"]): {
+                "name": str(entry["name"]),
+                "volume": entry["volume"],
+            }
+            for entry in sequence_entries
+        }
+        self.current_sequence_keys = list(current_entries.keys())
+        self.sequence_by_key.update(current_entries)
+
+        max_depth = 1
+        for entry in self.sequence_by_key.values():
+            depth = int(entry["volume"].shape[2]) if entry["volume"].ndim >= 3 else 1
+            max_depth = max(max_depth, depth)
+        self.max_depth = max_depth
+
+        if not keep_assignments:
+            self.panel_assignments = [self._empty_panel_assignment() for _ in range(4)]
+        else:
+            next_assignments = []
+            for assignment in self.panel_assignments:
+                base_key = assignment.get("base") if isinstance(assignment, dict) else None
+                overlay_key = assignment.get("overlay") if isinstance(assignment, dict) else None
+                next_assignments.append({
+                    "base": base_key if base_key in self.sequence_by_key else None,
+                    "overlay": overlay_key if overlay_key in self.sequence_by_key else None,
+                })
+            self.panel_assignments = next_assignments
+
+        if hasattr(self, "slice_slider") and self.slice_slider is not None:
+            self.slice_slider.setMaximum(max(0, self.max_depth - 1))
+            self.slice_slider.setValue(min(self.slice_slider.value(), self.slice_slider.maximum()))
+
+        if hasattr(self, "file_list") and self.file_list is not None:
+            self.file_list.clear()
+            for key in self.current_sequence_keys:
+                entry = self.sequence_by_key.get(key)
+                if entry is None:
+                    continue
+                item = QListWidgetItem(f"📄 {entry['name']}")
+                item.setData(Qt.UserRole, key)
+                item.setToolTip(entry['name'])
+                self.file_list.addItem(item)
+
+    def _on_scan_date_changed(self, index):
+        if self._scan_change_in_progress:
+            return
+        if index < 0 or self.on_scan_date_selected is None:
+            return
+
+        option_id = str(self.scan_date_combo.itemData(index) or "") if self.scan_date_combo is not None else ""
+        if not option_id:
+            return
+
+        self._scan_change_in_progress = True
+        try:
+            payload = self.on_scan_date_selected(option_id)
+            if not payload:
+                return
+
+            case_info = payload.get("case_info", {})
+            self.current_scan_option_id = option_id
+            if case_info:
+                self._set_case_info(case_info)
+
+            sequence_entries = payload.get("sequence_entries", [])
+            self._set_sequence_entries(sequence_entries, keep_assignments=True)
+            self.render_all_panels()
+        finally:
+            self._scan_change_in_progress = False
+
+    def _format_scan_date_with_time(self, request):
+        """Format scan date with time from created_at timestamp."""
+        scan_date = clean_value(request.get("scan_date"))
+        created_at = str(request.get("created_at", "") or "").strip()
+
+        if created_at and scan_date != "N/A":
+            try:
+                normalized = created_at.replace("Z", "+00:00")
+                date_obj = datetime.fromisoformat(normalized)
+                return f"{scan_date} {date_obj.strftime('%H:%M')}"
+            except Exception:
+                pass
+
+        return scan_date
+
+    def _empty_panel_assignment(self):
+        return {"base": None, "overlay": None}
+
+    def clear_panel_layer(self, panel_index, layer_role):
+        assignment = self.panel_assignments[panel_index]
+        if layer_role == "top":
+            assignment["base"] = assignment.get("overlay")
+            assignment["overlay"] = None
+        elif layer_role == "bottom":
+            assignment["overlay"] = None
+        self.render_all_panels()
+
+    def _blend_overlay(self, base_rgb, overlay_rgb, overlay_alpha=0.45):
+        import numpy as np
+
+        base = base_rgb.astype(np.float32) / 255.0
+        overlay = overlay_rgb.astype(np.float32) / 255.0
+        blended = base * (1.0 - overlay_alpha) + overlay * overlay_alpha
+        return (np.clip(blended, 0.0, 1.0) * 255.0).astype(np.uint8)
 
     def adjust_slice(self, delta):
         new_value = self.slice_slider.value() + delta
@@ -425,7 +960,30 @@ class CaseSequenceViewerDialog(QDialog):
     def assign_sequence_to_panel(self, panel_index, seq_key):
         if seq_key not in self.sequence_by_key:
             return
-        self.panel_assignments[panel_index] = seq_key
+        assignment = self.panel_assignments[panel_index]
+        base_key = assignment.get("base")
+        overlay_key = assignment.get("overlay")
+
+        if base_key is None:
+            assignment["base"] = seq_key
+        elif seq_key == base_key:
+            return
+        elif overlay_key is None:
+            assignment["overlay"] = seq_key
+        elif seq_key == overlay_key:
+            return
+        else:
+            assignment["overlay"] = seq_key
+
+        self.render_all_panels()
+
+    def swap_panel_layers(self, panel_index):
+        assignment = self.panel_assignments[panel_index]
+        base_key = assignment.get("base")
+        overlay_key = assignment.get("overlay")
+        if base_key is None or overlay_key is None:
+            return
+        assignment["base"], assignment["overlay"] = overlay_key, base_key
         self.render_all_panels()
 
     def on_panel_colormap_changed(self, _panel_index):
@@ -440,6 +998,12 @@ class CaseSequenceViewerDialog(QDialog):
         if max_v > min_v:
             return (arr - min_v) / (max_v - min_v)
         return np.zeros_like(arr, dtype=np.float32)
+
+    def _orient_slice_landscape(self, slice_2d):
+        """Preserve the source slice orientation so portrait layout stays intact."""
+        import numpy as np
+
+        return np.asarray(slice_2d)
 
     def _apply_colormap(self, normalized, cmap_name):
         import numpy as np
@@ -482,9 +1046,6 @@ class CaseSequenceViewerDialog(QDialog):
             g = np.clip(0.2 + 0.8 * x, 0, 1)
             b = np.clip(0.25 + 0.75 * x, 0, 1)
             rgb = np.stack([r, g, b], axis=-1)
-        else:  # Spring
-            rgb = np.stack([np.ones_like(x), x, 1.0 - x], axis=-1)
-
         return (rgb * 255.0).astype(np.uint8)
 
     def _is_dark_image(self, rgb_image):
@@ -501,10 +1062,46 @@ class CaseSequenceViewerDialog(QDialog):
         return luminance < 120.0
 
     def _to_pixmap(self, rgb_image, target_size):
+        import numpy as np
+
+        rgb_image = np.ascontiguousarray(rgb_image)
         height, width, _ = rgb_image.shape
         qimg = QImage(rgb_image.data, width, height, 3 * width, QImage.Format_RGB888).copy()
         pixmap = QPixmap.fromImage(qimg)
         return pixmap.scaled(target_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+    def _compose_side_by_side(self, left_rgb, right_rgb, target_size, background_color="#ffffff"):
+        width = max(1, int(target_size.width()))
+        height = max(1, int(target_size.height()))
+        gap = max(8, width // 40)
+        half_width = max(1, (width - gap) // 2)
+
+        canvas = QPixmap(width, height)
+        canvas.fill(QColor(background_color))
+
+        left_pixmap = self._to_pixmap(left_rgb, target_size).scaled(
+            half_width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        right_pixmap = self._to_pixmap(right_rgb, target_size).scaled(
+            half_width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+
+        painter = QPainter(canvas)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+
+        left_x = max(0, (half_width - left_pixmap.width()) // 2)
+        left_y = max(0, (height - left_pixmap.height()) // 2)
+        right_slot_x = half_width + gap
+        right_x = right_slot_x + max(0, (half_width - right_pixmap.width()) // 2)
+        right_y = max(0, (height - right_pixmap.height()) // 2)
+
+        separator_x = half_width
+        painter.fillRect(separator_x, 0, gap, height, QColor("white"))
+
+        painter.drawPixmap(left_x, left_y, left_pixmap)
+        painter.drawPixmap(right_x, right_y, right_pixmap)
+        painter.end()
+        return canvas
 
     def render_all_panels(self):
         import numpy as np
@@ -513,39 +1110,111 @@ class CaseSequenceViewerDialog(QDialog):
         self.slice_value_label.setText(f"{global_slice + 1} / {self.max_depth}")
 
         for panel_index, panel in enumerate(self.panels):
-            seq_key = self.panel_assignments[panel_index]
-            if not seq_key or seq_key not in self.sequence_by_key:
+            assignment = self.panel_assignments[panel_index]
+            base_key = assignment.get("base")
+            overlay_key = assignment.get("overlay")
+
+            if (not base_key or base_key not in self.sequence_by_key) and (not overlay_key or overlay_key not in self.sequence_by_key):
                 panel.set_has_sequence(False)
                 panel.title_label.setText(f"Panel {panel_index + 1}")
                 panel.image_label.setText("Drop a sequence file here")
                 panel.image_label.setPixmap(QPixmap())
                 panel.slice_info_label.setText("No file assigned")
+                panel.set_layer_info("", "", False)
                 panel.apply_contrast_theme(dark_background=False)
                 continue
 
-            entry = self.sequence_by_key[seq_key]
-            volume = entry["volume"]
-            name = entry["name"]
+            base_entry = self.sequence_by_key.get(base_key) if base_key in self.sequence_by_key else None
+            overlay_entry = self.sequence_by_key.get(overlay_key) if overlay_key in self.sequence_by_key else None
 
-            if volume.ndim < 3:
-                panel.image_label.setText("Unsupported volume shape")
-                panel.slice_info_label.setText("Expected 3D volume")
+            if base_entry is None and overlay_entry is not None:
+                base_entry = overlay_entry
+                overlay_entry = None
+                assignment["base"] = overlay_key
+                assignment["overlay"] = None
+
+            if base_entry is None:
+                panel.set_has_sequence(False)
+                panel.title_label.setText(f"Panel {panel_index + 1}")
+                panel.image_label.setText("Drop a sequence file here")
+                panel.image_label.setPixmap(QPixmap())
+                panel.slice_info_label.setText("No file assigned")
+                panel.set_layer_info("", "", False)
+                panel.apply_contrast_theme(dark_background=False)
                 continue
 
-            depth = int(volume.shape[2])
-            slice_index = min(max(0, global_slice), max(0, depth - 1))
-            slice_2d = np.asarray(volume[:, :, slice_index])
-            slice_2d = np.rot90(slice_2d)
-            normalized = self._normalize_slice(slice_2d)
-            rgb = self._apply_colormap(normalized, panel.cmap_combo.currentText())
+            base_volume = base_entry["volume"]
+            base_name = base_entry["name"]
+
+            if base_volume.ndim < 3:
+                panel.image_label.setText("Unsupported volume shape")
+                panel.slice_info_label.setText("Expected 3D volume")
+                panel.set_layer_info("", "", False)
+                continue
+
+            base_depth = int(base_volume.shape[2])
+            slice_index = min(max(0, global_slice), max(0, base_depth - 1))
+            base_slice = np.asarray(base_volume[:, :, slice_index])
+            base_slice = self._orient_slice_landscape(base_slice)
+            base_normalized = self._normalize_slice(base_slice)
+
+            if overlay_entry is not None and overlay_entry.get("volume") is not None:
+                overlay_volume = overlay_entry["volume"]
+                overlay_name = overlay_entry["name"]
+                if overlay_volume.ndim >= 3:
+                    overlay_depth = int(overlay_volume.shape[2])
+                    overlay_slice_index = min(max(0, global_slice), max(0, overlay_depth - 1))
+                    overlay_slice = np.asarray(overlay_volume[:, :, overlay_slice_index])
+                    overlay_slice = self._orient_slice_landscape(overlay_slice)
+                    overlay_normalized = self._normalize_slice(overlay_slice)
+
+                    left_rgb = self._apply_colormap(base_normalized, panel.cmap_combo.currentText())
+                    right_rgb = self._apply_colormap(overlay_normalized, panel.cmap_combo.currentText())
+                    pair_is_dark = self._is_dark_image(left_rgb) and self._is_dark_image(right_rgb)
+                    panel_bg = "#0f172a" if pair_is_dark else "#ffffff"
+                    rgb = self._compose_side_by_side(
+                        left_rgb,
+                        right_rgb,
+                        panel.image_label.size(),
+                        background_color=panel_bg,
+                    )
+                    panel.apply_contrast_theme(dark_background=pair_is_dark)
+                    panel.set_has_sequence(True)
+                    panel.title_label.setText(
+                        f"Panel {panel_index + 1} • {base_name} | {overlay_name}"
+                    )
+                    panel.image_label.setText("")
+                    panel.image_label.setPixmap(rgb)
+                    panel.set_layer_info(
+                        (
+                            f"Left: {base_name}  •  Slice {slice_index + 1}/{base_depth}"
+                            f"  •  Shape {base_volume.shape[0]}x{base_volume.shape[1]}x{base_volume.shape[2]}"
+                        ),
+                        (
+                            f"Right: {overlay_name}  •  Slice {overlay_slice_index + 1}/{overlay_depth}"
+                            f"  •  Shape {overlay_volume.shape[0]}x{overlay_volume.shape[1]}x{overlay_volume.shape[2]}"
+                        ),
+                        True,
+                    )
+                    continue
+
+            rgb = self._apply_colormap(base_normalized, panel.cmap_combo.currentText())
             panel.apply_contrast_theme(dark_background=self._is_dark_image(rgb))
             panel.set_has_sequence(True)
 
-            panel.title_label.setText(f"Panel {panel_index + 1} • {name}")
+            panel.title_label.setText(f"Panel {panel_index + 1} • {base_name}")
             panel.image_label.setText("")
             panel.image_label.setPixmap(self._to_pixmap(rgb, panel.image_label.size()))
+            panel.set_layer_info(
+                (
+                    f"Left: {base_name}  •  Slice {slice_index + 1}/{base_depth}"
+                    f"  •  Shape {base_volume.shape[0]}x{base_volume.shape[1]}x{base_volume.shape[2]}"
+                ),
+                "",
+                True,
+            )
             panel.slice_info_label.setText(
-                f"Slice {slice_index + 1}/{depth}  •  Shape {volume.shape[0]}x{volume.shape[1]}x{volume.shape[2]}"
+                f"Slice {slice_index + 1}/{base_depth}  •  Shape {base_volume.shape[0]}x{base_volume.shape[1]}x{base_volume.shape[2]}"
             )
 
 
@@ -1488,7 +2157,6 @@ class DoctorView:
                 QFrame:hover {
                     background: #dbeafe;
                     border-color: #1e40af;
-                    cursor: pointer;
                 }
             """
         return """
@@ -1501,7 +2169,6 @@ class DoctorView:
             QFrame:hover {
                 background: #f3f4f6;
                 border-color: #d1d5db;
-                cursor: pointer;
             }
         """
 
@@ -1837,7 +2504,9 @@ class DoctorView:
         request_id = request.get('id')
         refs = tuple(str(item).strip() for item in uploaded_tests if str(item).strip())
         names = tuple(str(item).strip() for item in (request.get('uploaded_test_file_names') or []))
-        return request_id, refs, names
+        segmentation_ref = str(request.get('segmentation_file') or '').strip()
+        segmentation_name = str(request.get('segmentation_file_name') or '').strip()
+        return request_id, refs, names, segmentation_ref, segmentation_name
 
     def _store_sequence_cache(self, cache_key, sequence_entries):
         """Store case sequence data with a small FIFO cache."""
@@ -1846,35 +2515,199 @@ class DoctorView:
             oldest_key = next(iter(self.sequence_view_cache))
             self.sequence_view_cache.pop(oldest_key, None)
 
-    def _open_case_test_sequences_viewer(self, request, uploaded_tests):
-        """Open multi-panel sequence viewer for attached test files."""
+    def _build_case_info_payload(self, request):
+        return {
+            "patient_name": request.get("patient_name", ""),
+            "patient_id": request.get("patient_id", ""),
+            "diagnosis_type": request.get("diagnosis_type", ""),
+            "priority": request.get("priority", ""),
+            "status": request.get("status", ""),
+            "scan_date": request.get("scan_date", ""),
+            "created_at": request.get("created_at", ""),
+        }
+
+    def _format_scan_date_with_time(self, request):
+        scan_date = clean_value(request.get("scan_date"))
+        created_at = str(request.get("created_at", "") or "").strip()
+
+        if created_at and scan_date != "N/A":
+            try:
+                normalized = created_at.replace("Z", "+00:00")
+                date_obj = datetime.fromisoformat(normalized)
+                return f"{scan_date} {date_obj.strftime('%H:%M')}"
+            except Exception:
+                pass
+
+        return scan_date
+
+    def _short_patient_id(self, patient_id):
+        text = "".join(ch for ch in str(patient_id or "").strip() if ch.isalnum())
+        if not text:
+            return "N/A"
+        return text[-4:] if len(text) > 4 else text
+
+    def _infer_file_modality(self, file_name):
+        name = os.path.basename(str(file_name or "")).lower()
+        if not name:
+            return "file"
+
+        modality_patterns = [
+            ("seg", "seg"),
+            ("t2f", "t2f"),
+            ("t2flair", "t2f"),
+            ("flair", "flair"),
+            ("t2", "t2"),
+            ("t1ce", "t1ce"),
+            ("t1c", "t1c"),
+            ("t1gd", "t1c"),
+            ("t1", "t1"),
+        ]
+
+        for pattern, label in modality_patterns:
+            if pattern in name:
+                return label
+
+        stem = name
+        for suffix in (".nii.gz", ".nii", ".gz"):
+            if stem.endswith(suffix):
+                stem = stem[: -len(suffix)]
+                break
+        parts = [part for part in stem.replace("_", "-").split("-") if part]
+        return parts[-1] if parts else "file"
+
+    def _entry_modality(self, entry):
+        modality = str((entry or {}).get("modality") or "").strip().lower()
+        if modality:
+            return modality
+        return self._infer_file_modality((entry or {}).get("name"))
+
+    def _is_segmentation_entry(self, entry):
+        source_type = str((entry or {}).get("source_type") or "").strip().lower()
+        modality = self._entry_modality(entry)
+        name = str((entry or {}).get("name") or "").lower()
+        return source_type == "segmentation" or modality == "seg" or "seg" in name
+
+    def _find_t1_entry(self, exclude_keys=None):
+        excluded = {str(key).strip() for key in (exclude_keys or []) if str(key).strip()}
+
+        for entry in self.sequence_by_key.values():
+            key = str(entry.get("key") or "").strip()
+            if key in excluded:
+                continue
+            if self._entry_modality(entry) == "t1":
+                return entry
+
+        for entry in self.sequence_by_key.values():
+            key = str(entry.get("key") or "").strip()
+            if key in excluded:
+                continue
+            if not self._is_segmentation_entry(entry):
+                return entry
+
+        return None
+
+    def _apply_segmentation_overlay(self, base_rgb, segmentation_slice):
+        import numpy as np
+
+        mask = np.nan_to_num(np.asarray(segmentation_slice, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0) > 0
+        if not mask.any():
+            return base_rgb
+
+        output = np.asarray(base_rgb, dtype=np.uint8).copy().astype(np.float32)
+        overlay_color = np.array([220.0, 38.0, 38.0], dtype=np.float32)
+        alpha = 0.45
+        output[mask] = output[mask] * (1.0 - alpha) + overlay_color * alpha
+        return np.clip(output, 0.0, 255.0).astype(np.uint8)
+
+    def _format_viewer_file_name(self, request, raw_name, file_index=0):
+        patient_name = clean_value(request.get("patient_name"))
+        patient_id = self._short_patient_id(request.get("patient_id"))
+        scan_date = clean_value(request.get("scan_date"))
+        modality = self._infer_file_modality(raw_name)
+
+        parts = [patient_name, patient_id, scan_date, modality]
+        formatted = "-".join(part for part in parts if part and part != "N/A")
+        if formatted:
+            return formatted
+
+        fallback = os.path.basename(str(raw_name or "")).strip()
+        return fallback if fallback else f"file-{file_index + 1}"
+
+    def _extract_uploaded_tests(self, request):
+        return [
+            item.strip()
+            for item in str(request.get('uploaded_test_file', '')).split('|')
+            if item.strip()
+        ]
+
+    def _build_viewer_scan_date_options(self, request):
+        """Build scan-date options for the selected patient request."""
+        patient_id = str(request.get('patient_id', '')).strip()
+        if not patient_id:
+            return []
+
+        options = []
+        seen_ids = set()
+
+        source_requests = list(self.inbox_all_requests) if self.inbox_all_requests else []
+        source_requests.append(request)
+
+        for candidate in source_requests:
+            if str(candidate.get('patient_id', '')).strip() != patient_id:
+                continue
+
+            uploaded_tests = self._extract_uploaded_tests(candidate)
+            has_segmentation = bool(str(candidate.get('segmentation_file', '')).strip())
+            if not uploaded_tests and not has_segmentation:
+                continue
+
+            option_id = str(candidate.get('id') or '').strip()
+            if not option_id:
+                option_id = f"{clean_value(candidate.get('scan_date'))}"
+            if option_id in seen_ids:
+                continue
+            seen_ids.add(option_id)
+
+            scan_date_label = clean_value(candidate.get('scan_date'))
+            created_label = self._format_request_datetime(candidate.get('created_at', ''))
+            label = f"{scan_date_label}" if created_label != 'N/A' else scan_date_label
+
+            options.append({
+                "id": option_id,
+                "label": label,
+                "request": candidate,
+                "uploaded_tests": uploaded_tests,
+            })
+
+        options.sort(
+            key=lambda opt: str((opt.get('request') or {}).get('created_at', '')),
+            reverse=True,
+        )
+        return options
+
+    def _build_viewer_payload(self, request, uploaded_tests):
+        """Load case info and sequence entries for one scan-date request."""
         try:
             import nibabel as nib
             import numpy as np
         except Exception:
             print("Viewer unavailable: missing nibabel/numpy")
-            return
+            return {}
 
         cache_key = self._build_sequence_cache_key(request, uploaded_tests)
         cached_entries = self.sequence_view_cache.get(cache_key)
         if cached_entries:
-            case_info = {
-                "patient_name": request.get("patient_name", ""),
-                "patient_id": request.get("patient_id", ""),
-                "diagnosis_type": request.get("diagnosis_type", ""),
-                "priority": request.get("priority", ""),
-                "status": request.get("status", ""),
-                "scan_date": request.get("scan_date", ""),
+            return {
+                "case_info": self._build_case_info_payload(request),
+                "sequence_entries": cached_entries,
             }
-            viewer_dialog = CaseSequenceViewerDialog(self.parent, cached_entries, case_info=case_info)
-            viewer_dialog.exec()
-            return
 
         stored_test_names = request.get('uploaded_test_file_names') or []
         entries_by_index = {}
         warnings = []
 
         load_plan = []
+        request_id = str(request.get('id') or '').strip()
         for idx, _file_ref in enumerate(uploaded_tests):
             display_name = ""
             if idx < len(stored_test_names):
@@ -1882,38 +2715,66 @@ class DoctorView:
             if not display_name:
                 display_name = f"sequence_{idx + 1}.nii.gz"
 
-            load_plan.append((idx, display_name))
+            display_label = self._format_viewer_file_name(request, display_name, idx)
+            load_plan.append({
+                "index": idx,
+                "display_name": display_name,
+                "display_label": display_label,
+                "file_type": "test",
+                "source_type": "test",
+            })
 
-        def load_one_entry(idx, display_name):
+        segmentation_file = str(request.get('segmentation_file') or '').strip()
+        if segmentation_file:
+            segmentation_name = str(request.get('segmentation_file_name') or '').strip()
+            if not segmentation_name:
+                segmentation_name = os.path.basename(segmentation_file) or "segmentation.nii.gz"
+            segmentation_label = self._format_viewer_file_name(request, segmentation_name, len(load_plan))
+            load_plan.append({
+                "index": len(load_plan),
+                "display_name": segmentation_name,
+                "display_label": segmentation_label,
+                "file_type": "segmentation",
+                "source_type": "segmentation",
+            })
+
+        def load_one_entry(item):
+            idx = item["index"]
+            display_name = item["display_name"]
+            display_label = item["display_label"]
+            file_type = item["file_type"]
+            source_type = item["source_type"]
             local_path, error_message = self._download_attached_file_to_temp(
                 request_id=request.get('id'),
-                file_type='test',
-                file_index=idx,
+                file_type=file_type,
+                file_index=0 if file_type == 'segmentation' else idx,
                 preferred_name=display_name,
             )
             if not local_path:
-                return idx, None, f"{display_name}: {error_message}"
+                return idx, None, f"{display_label}: {error_message}"
 
             try:
                 volume = nib.load(local_path).get_fdata()
                 if volume.ndim > 3:
                     volume = volume[..., 0]
                 if volume.ndim != 3:
-                    return idx, None, f"{display_name}: unsupported volume shape {volume.shape}"
+                    return idx, None, f"{display_label}: unsupported volume shape {volume.shape}"
 
-                # Keep memory footprint manageable while preserving viewer quality.
                 volume = np.asarray(volume, dtype=np.float32)
+                entry_key = f"{request_id}:{source_type}:{idx}" if request_id else f"{source_type}:{idx}"
                 return idx, {
-                    "key": str(idx),
-                    "name": display_name,
+                    "key": entry_key,
+                    "name": display_label,
                     "volume": volume,
+                    "modality": self._infer_file_modality(display_name),
+                    "source_type": source_type,
                 }, ""
             except Exception as exc:
-                return idx, None, f"{display_name}: failed to read volume ({exc})"
+                return idx, None, f"{display_label}: failed to read volume ({exc})"
 
         worker_count = min(4, max(1, len(load_plan)))
         with ThreadPoolExecutor(max_workers=worker_count) as pool:
-            futures = [pool.submit(load_one_entry, idx, display_name) for idx, display_name in load_plan]
+            futures = [pool.submit(load_one_entry, item) for item in load_plan]
             for future in as_completed(futures):
                 idx, entry, warning_message = future.result()
                 if entry is not None:
@@ -1922,26 +2783,46 @@ class DoctorView:
                     warnings.append(warning_message)
 
         sequence_entries = [entries_by_index[idx] for idx in sorted(entries_by_index.keys())]
-
         if not sequence_entries:
             if warnings:
                 print("Viewer skipped unsupported files: " + " | ".join(warnings[:5]))
-            return
+            return {}
 
         self._store_sequence_cache(cache_key, sequence_entries)
-
         if warnings:
             print("Viewer partial load: " + " | ".join(warnings[:5]))
 
-        case_info = {
-            "patient_name": request.get("patient_name", ""),
-            "patient_id": request.get("patient_id", ""),
-            "diagnosis_type": request.get("diagnosis_type", ""),
-            "priority": request.get("priority", ""),
-            "status": request.get("status", ""),
-            "scan_date": request.get("scan_date", ""),
+        return {
+            "case_info": self._build_case_info_payload(request),
+            "sequence_entries": sequence_entries,
         }
-        viewer_dialog = CaseSequenceViewerDialog(self.parent, sequence_entries, case_info=case_info)
+
+    def _open_case_test_sequences_viewer(self, request, uploaded_tests, scan_date_options=None):
+        """Open multi-panel sequence viewer for attached test files."""
+        initial_payload = self._build_viewer_payload(request, uploaded_tests)
+        if not initial_payload:
+            return
+
+        options = list(scan_date_options or [])
+        current_option_id = str(request.get('id') or '')
+
+        def on_scan_date_selected(option_id):
+            for option in options:
+                if str(option.get('id') or '') != str(option_id):
+                    continue
+                option_request = option.get('request') or {}
+                option_tests = option.get('uploaded_tests') or []
+                return self._build_viewer_payload(option_request, option_tests)
+            return {}
+
+        viewer_dialog = CaseSequenceViewerDialog(
+            self.parent,
+            initial_payload.get("sequence_entries", []),
+            case_info=initial_payload.get("case_info", {}),
+            scan_date_options=options,
+            current_scan_option_id=current_option_id,
+            on_scan_date_selected=on_scan_date_selected if options else None,
+        )
         viewer_dialog.exec()
     
     def show_request_details(self, request, card_widget=None):
@@ -2094,6 +2975,7 @@ class DoctorView:
                         display_name = str(stored_test_names[idx]).strip()
                     if not display_name:
                         display_name = os.path.basename(file_path) or file_path
+                    display_name = self._format_viewer_file_name(request, display_name, idx)
 
                     file_chip = QFrame()
                     file_chip.setStyleSheet("""
@@ -2151,6 +3033,7 @@ class DoctorView:
                 seg_name = str(request.get('segmentation_file_name', '')).strip()
                 if not seg_name:
                     seg_name = os.path.basename(seg_value) or seg_value
+                seg_name = self._format_viewer_file_name(request, seg_name, 0)
                 seg_label = QLabel(f"📄 {seg_name}")
                 seg_label.setStyleSheet("color: #111827;")
                 seg_label.setWordWrap(True)
@@ -2208,9 +3091,10 @@ class DoctorView:
                     background: #1d4ed8;
                 }
             """)
+            scan_date_options = self._build_viewer_scan_date_options(request)
             visualize_btn.clicked.connect(
-                lambda checked, req=request, refs=list(visualize_test_refs):
-                self._open_case_test_sequences_viewer(req, refs)
+                lambda checked, req=request, refs=list(visualize_test_refs), options=list(scan_date_options):
+                self._open_case_test_sequences_viewer(req, refs, scan_date_options=options)
             )
             action_row.addWidget(visualize_btn)
 
