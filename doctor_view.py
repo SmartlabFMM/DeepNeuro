@@ -6,7 +6,7 @@ import threading
 import time
 
 from PySide6.QtCore import Qt, QDate, QTimer, QStringListModel
-from PySide6.QtGui import QDesktopServices, QFont, QIntValidator
+from PySide6.QtGui import QDesktopServices, QFont, QIntValidator, QRegularExpressionValidator
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                                QFrame, QSizePolicy, QMessageBox, QDialog, QFormLayout,
@@ -15,13 +15,14 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushB
                                QStackedWidget, QFileDialog, QGridLayout)
 from api_client import api_client
 from doctor_view_parts import loaders as doctor_view_loaders
-from doctor_view_parts.loaders import DotSpinner
+from shared_loaders import DotSpinner
 from shared_request_ui import (
     REQUEST_DETAILS_DIALOG_STYLESHEET,
     DATE_FILTER_CLEAR_BUTTON_STYLESHEET,
     clean_value,
     create_date_filter_label,
     create_standard_date_filter_edit,
+    format_request_datetime,
     make_badge,
     make_section_card,
 )
@@ -323,7 +324,7 @@ class DoctorView:
                     str(patient.get('phone_number', '')),
                     "Yes" if patient.get('has_conditions') else "No",
                     str(patient.get('conditions_notes') or '-'),
-                    self._format_request_datetime(patient.get('created_at', '')),
+                    format_request_datetime(patient.get('created_at', '')),
                 ]
 
                 for col_index, value in enumerate(values):
@@ -821,26 +822,7 @@ class DoctorView:
             }
         """
 
-    def _format_request_datetime(self, date_value):
-        """Format date as DD-MM-YYYY HH:MM."""
-        if not date_value:
-            return 'N/A'
 
-        date_str = str(date_value).strip()
-        try:
-            normalized = date_str.replace('Z', '+00:00')
-            date_obj = datetime.fromisoformat(normalized)
-            return date_obj.strftime("%d-%m-%Y %H:%M")
-        except Exception:
-            pass
-
-        if len(date_str) >= 16 and date_str[4] == '-' and date_str[7] == '-':
-            return f"{date_str[8:10]}-{date_str[5:7]}-{date_str[0:4]} {date_str[11:16]}"
-
-        if len(date_str) >= 10 and date_str[4] == '-' and date_str[7] == '-':
-            return f"{date_str[8:10]}-{date_str[5:7]}-{date_str[0:4]} 00:00"
-
-        return date_str
     
     def create_grouped_request_card(self, patient_id, requests):
         """Create a grouped card for multiple requests with the same patient ID"""
@@ -911,7 +893,7 @@ class DoctorView:
         """)
 
         latest_request = max(requests, key=lambda r: str(r.get('created_at', '')))
-        latest_date = self._format_request_datetime(latest_request.get('created_at', 'N/A'))
+        latest_date = format_request_datetime(latest_request.get('created_at', 'N/A'))
 
         latest_date_label = QLabel(f"📅 {latest_date}")
         latest_date_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
@@ -1035,7 +1017,7 @@ class DoctorView:
         priority_label.setFixedWidth(120)
         
         # Date sent
-        formatted_date = self._format_request_datetime(request.get('created_at', 'N/A'))
+        formatted_date = format_request_datetime(request.get('created_at', 'N/A'))
         
         date_label = QLabel(f"📅 {formatted_date}")
         date_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
@@ -1318,7 +1300,7 @@ class DoctorView:
             seen_ids.add(option_id)
 
             scan_date_label = clean_value(candidate.get('scan_date'))
-            created_label = self._format_request_datetime(candidate.get('created_at', ''))
+            created_label = format_request_datetime(candidate.get('created_at', ''))
             label = f"{scan_date_label}" if created_label != 'N/A' else scan_date_label
 
             options.append({
@@ -1884,9 +1866,13 @@ class DoctorView:
 
         patient_id = QLineEdit()
         patient_id.setPlaceholderText("Hospital or national ID")
+        patient_id_validator = QRegularExpressionValidator(r"[A-Za-z0-9\-_]{3,20}")
+        patient_id.setValidator(patient_id_validator)
 
         patient_email = QLineEdit()
         patient_email.setPlaceholderText("Patient email")
+        email_validator = QRegularExpressionValidator(r"[\w\.\-\+]+@[\w\.\-]+\.\w+")
+        patient_email.setValidator(email_validator)
 
         phone_number = QLineEdit()
         phone_number.setPlaceholderText("Phone number")
@@ -2041,6 +2027,10 @@ class DoctorView:
 
     def open_send_case_form(self):
         """Open the send case dialog for doctors"""
+        # Create validators once for reuse
+        email_validator = QRegularExpressionValidator(r"[\w\.\-\+]+@[\w\.\-]+\.\w+")
+        patient_id_validator = QRegularExpressionValidator(r"[A-Za-z0-9\-_]{3,20}")
+        
         dialog = QDialog(self.parent)
         dialog.setWindowTitle("Send Case to Radiologist")
         dialog.setMinimumWidth(620)
@@ -2187,6 +2177,7 @@ class DoctorView:
 
         patient_id = QLineEdit()
         patient_id.setPlaceholderText("ID")
+        patient_id.setValidator(patient_id_validator)
 
         # Add autocomplete for patient IDs (loaded in background)
         patient_id_model = QStringListModel([])
@@ -2214,6 +2205,7 @@ class DoctorView:
 
         patient_email = QLineEdit()
         patient_email.setPlaceholderText("Email")
+        patient_email.setValidator(email_validator)
 
         phone_number = QLineEdit()
         phone_number.setPlaceholderText("Phone number")

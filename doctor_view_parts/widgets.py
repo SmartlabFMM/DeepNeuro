@@ -3,6 +3,7 @@
 from PySide6.QtCore import Qt, QMimeData
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QComboBox,
     QFrame,
@@ -25,7 +26,7 @@ class DraggableSequenceList(QListWidget):
         super().__init__(parent)
         self.setDragEnabled(True)
         self.setAcceptDrops(False)
-        self.setSelectionMode(self.SingleSelection)
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
         self.setDefaultDropAction(Qt.CopyAction)
 
     def mimeTypes(self):

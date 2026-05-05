@@ -4,15 +4,17 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushB
                                QApplication, QScrollArea, QPlainTextEdit, QLineEdit,
                                QFileDialog, QComboBox, QStackedWidget, QGridLayout)
 from PySide6.QtCore import Qt, QTimer, QDate
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QRegularExpressionValidator
 from api_client import api_client
 from radiologist_view_parts import loaders as radiologist_view_loaders
+from shared_loaders import DotSpinner
 from shared_request_ui import (
     REQUEST_DETAILS_DIALOG_STYLESHEET,
     DATE_FILTER_CLEAR_BUTTON_STYLESHEET,
     clean_value,
     create_date_filter_label,
     create_standard_date_filter_edit,
+    format_request_datetime,
     make_badge,
     make_section_card,
 )
@@ -614,26 +616,7 @@ class RadiologistView:
             }
         """
 
-    def _format_request_datetime(self, date_value):
-        """Format date as DD-MM-YYYY HH:MM."""
-        if not date_value:
-            return 'N/A'
 
-        date_str = str(date_value).strip()
-        try:
-            normalized = date_str.replace('Z', '+00:00')
-            date_obj = datetime.fromisoformat(normalized)
-            return date_obj.strftime("%d-%m-%Y %H:%M")
-        except Exception:
-            pass
-
-        if len(date_str) >= 16 and date_str[4] == '-' and date_str[7] == '-':
-            return f"{date_str[8:10]}-{date_str[5:7]}-{date_str[0:4]} {date_str[11:16]}"
-
-        if len(date_str) >= 10 and date_str[4] == '-' and date_str[7] == '-':
-            return f"{date_str[8:10]}-{date_str[5:7]}-{date_str[0:4]} 00:00"
-
-        return date_str
     
     def create_grouped_radiologist_request_card(self, patient_id, requests):
         """Create a grouped card for multiple requests with the same patient ID"""
@@ -704,7 +687,7 @@ class RadiologistView:
         """)
 
         latest_request = max(requests, key=lambda r: str(r.get('created_at', '')))
-        latest_date = self._format_request_datetime(latest_request.get('created_at', 'N/A'))
+        latest_date = format_request_datetime(latest_request.get('created_at', 'N/A'))
 
         latest_date_label = QLabel(f"📅 {latest_date}")
         latest_date_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
@@ -828,7 +811,7 @@ class RadiologistView:
         priority_label.setFixedWidth(120)
         
         # Date received
-        formatted_date = self._format_request_datetime(request.get('created_at', 'N/A'))
+        formatted_date = format_request_datetime(request.get('created_at', 'N/A'))
         
         date_label = QLabel(f"📅 {formatted_date}")
         date_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
@@ -940,7 +923,7 @@ class RadiologistView:
         status_label = make_badge(request.get('status', 'N/A'), "#ecfeff", "#155e75", "#a5f3fc")
         scan_date_label = QLabel(clean_value(request.get('scan_date')))
         scan_date_label.setStyleSheet("color: #111827; padding-top: 4px;")
-        received_label = QLabel(clean_value(self._format_request_datetime(request.get('created_at', 'N/A'))))
+        received_label = QLabel(clean_value(format_request_datetime(request.get('created_at', 'N/A'))))
         received_label.setStyleSheet("color: #111827; padding-top: 4px;")
         from_doctor_label = QLabel(clean_value(request.get('doctor_name')))
         from_doctor_label.setStyleSheet("color: #111827; padding-top: 4px;")

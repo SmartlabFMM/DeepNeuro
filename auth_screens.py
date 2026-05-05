@@ -769,6 +769,12 @@ def create_branding_panel():
         scaled_pixmap = pixmap.scaledToWidth(250, Qt.SmoothTransformation)
         logo_label.setPixmap(scaled_pixmap)
         logo_label.setAlignment(Qt.AlignCenter)
+        logo_label.setObjectName("appLogo")
+        layout.addWidget(logo_label)
+    else:
+        # Ensure a logo widget exists even if file missing
+        logo_label.setObjectName("appLogo")
+        logo_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(logo_label)
 
     title = QLabel("DeepNeuro")
@@ -803,5 +809,8 @@ def create_branding_panel():
     layout.addWidget(subtitle)
     layout.addWidget(description)
     layout.addStretch()
+
+    # attach reference for external animations
+    panel.logo_label = logo_label
 
     return panel
