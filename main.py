@@ -1,7 +1,15 @@
 import sys
 import os
-from PySide6.QtWidgets import QApplication
+
+# Set OpenGL to software mode BEFORE creating QApplication to prevent VTK blocking
+# Advanced VTK/PyOpenGL overrides are platform-specific; only apply them on Linux
+os.environ["QT_OPENGL"] = "software"
+if sys.platform.startswith("linux"):
+    os.environ["QT_XCB_GL_INTEGRATION"] = "xcb_glx"
+    os.environ["PYOPENGL_PLATFORM"] = "osmesa"  # Force off-screen Mesa rendering for VTK on Linux
+
 from PySide6.QtGui import QGuiApplication, QCursor
+from PySide6.QtWidgets import QApplication
 from auth_window import AuthWindow
 from splash import SplashScreen
 

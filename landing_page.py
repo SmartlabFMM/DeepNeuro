@@ -1,4 +1,4 @@
-﻿from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+﻿from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QLabel, QPushButton, QFrame, QStackedWidget,
                                QSizePolicy, QMessageBox, QDialog, QFormLayout,
                                QComboBox)
@@ -30,7 +30,14 @@ class LandingPage(QMainWindow):
         
     def init_ui(self):
         self.setWindowTitle('DeepNeuro - Brain Disease Diagnosis')
-        self.showMaximized()
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            target_width = min(1500, max(1280, available.width() - 120))
+            target_height = min(930, max(820, available.height() - 110))
+            self.resize(target_width, target_height)
+        else:
+            self.resize(1440, 900)
         
         # Central widget
         central_widget = QWidget()
@@ -93,46 +100,6 @@ class LandingPage(QMainWindow):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(8)
 
-        header = QFrame()
-        header.setStyleSheet("""
-            QFrame {
-                background: white;
-                border-radius: 8px;
-                border: 1px solid #e2e8f0;
-                padding: 10px;
-            }
-        """)
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(12, 8, 12, 8)
-
-        back_btn = QPushButton("← Back to Landing")
-        back_btn.setFont(QFont("Segoe UI", 9, QFont.Bold))
-        back_btn.setCursor(Qt.PointingHandCursor)
-        back_btn.setStyleSheet("""
-            QPushButton {
-                background: #edf2f7;
-                color: #2d3748;
-                border: 1px solid #e2e8f0;
-                border-radius: 6px;
-                padding: 8px 14px;
-            }
-            QPushButton:hover {
-                background: #e2e8f0;
-            }
-            QPushButton:pressed {
-                background: #cbd5e0;
-            }
-        """)
-        back_btn.clicked.connect(self.show_landing_page)
-
-        title = QLabel("🧠 3D Brain Visualization")
-        title.setFont(QFont("Segoe UI", 14, QFont.Bold))
-    
-        header_layout.addWidget(back_btn)
-        header_layout.addSpacing(8)
-        header_layout.addWidget(title)
-        header_layout.addStretch()
-
 
         viewer_container = QFrame()
         viewer_container.setStyleSheet("""
@@ -154,7 +121,6 @@ class LandingPage(QMainWindow):
 
         viewer_layout.addWidget(self.viewer_host)
 
-        layout.addWidget(header)
         layout.addWidget(viewer_container)
         return container
 
