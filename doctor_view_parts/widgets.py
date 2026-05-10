@@ -138,7 +138,22 @@ class DraggableLayerInfoBox(QFrame):
         self.close_button = QPushButton("×")
         self.close_button.setFixedSize(18, 18)
         self.close_button.setCursor(Qt.PointingHandCursor)
-        self.close_button.setFlat(True)
+        self.close_button.setFlat(False)
+        self.close_button.setStyleSheet("""
+            QPushButton {
+                background: rgba(239,68,68,0.85);
+                color: white;
+                border: none;
+                border-radius: 9px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background: rgba(220,38,38,0.95);
+            }
+            QPushButton:pressed {
+                background: rgba(185,28,28,0.95);
+            }
+        """)
         self.close_button.clicked.connect(self._handle_close_clicked)
 
         row.addWidget(self.info_label, 1)

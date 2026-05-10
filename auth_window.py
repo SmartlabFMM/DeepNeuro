@@ -62,14 +62,17 @@ class AuthWindow(QMainWindow):
         self._is_centered_once = True
         QTimer.singleShot(0, self.center_window)
         QTimer.singleShot(120, self.center_window)
+        QTimer.singleShot(250, lambda: (self.raise_(), self.activateWindow()))
 
     def center_window(self):
-        screen = QGuiApplication.screenAt(QCursor.pos()) or self.screen() or QGuiApplication.primaryScreen()
+        # Prefer the primary screen center to ensure consistent centering
+        screen = QGuiApplication.primaryScreen() or self.screen()
         if screen is None:
             return
 
+        screen_center = screen.availableGeometry().center()
         window_rect = self.frameGeometry()
-        window_rect.moveCenter(screen.availableGeometry().center())
+        window_rect.moveCenter(screen_center)
         self.move(window_rect.topLeft())
 
     def create_right_panel(self):

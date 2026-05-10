@@ -37,6 +37,12 @@ class CaseSequenceViewerDialog(QDialog):
         on_scan_date_selected=None,
     ):
         super().__init__(parent)
+        # Ensure dialog behaves like a normal top-level window with maximize/restore
+        self.setWindowFlags(self.windowFlags() | Qt.Window)
+        # Enable standard window system buttons (minimize, maximize, close)
+        self.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
+        self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
+        self.setWindowFlag(Qt.WindowCloseButtonHint, True)
         self.setWindowTitle("Case Sequence Viewer")
         self.setMinimumSize(1250, 780)
         self.setSizeGripEnabled(True)

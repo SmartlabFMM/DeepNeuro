@@ -30,14 +30,8 @@ class LandingPage(QMainWindow):
         
     def init_ui(self):
         self.setWindowTitle('DeepNeuro - Brain Disease Diagnosis')
-        screen = QApplication.primaryScreen()
-        if screen is not None:
-            available = screen.availableGeometry()
-            target_width = min(1500, max(1280, available.width() - 120))
-            target_height = min(930, max(820, available.height() - 110))
-            self.resize(target_width, target_height)
-        else:
-            self.resize(1440, 900)
+        # Open landing page maximized for a full-screen experience
+        self.showMaximized()
         
         # Central widget
         central_widget = QWidget()

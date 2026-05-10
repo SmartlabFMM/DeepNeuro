@@ -51,12 +51,12 @@ color_hex = {
 }
 
 
-class SegmentationViewer(QWidget):
+class SegmentationPane(QWidget):
     def __init__(self):
         super().__init__()
         self.setObjectName("SegmentationViewerRoot")
         self.setWindowTitle("3D Segmentation Viewer - DeepNeuro")
-        self.setMinimumSize(1260, 720)
+        self.setMinimumSize(620, 720)
         self.setStyleSheet("""
             QWidget#SegmentationViewerRoot {
                 background: #081223;
@@ -85,6 +85,8 @@ class SegmentationViewer(QWidget):
         self.tumor_volume_voxels = 0
         self.current_file = None
         self.layer_opacities = {0: 0.15, 1: 0.85, 2: 0.8, 3: 0.9, 4: 0.85}
+        self.sidebar_stat_labels = {}
+        self.peer_viewer = None
 
         # Main layout with splitter
         main_layout = QVBoxLayout(self)
@@ -189,6 +191,74 @@ class SegmentationViewer(QWidget):
             QPushButton:pressed {
                 background: linear-gradient(to bottom, #4f46e5, #4338ca);
             }
+            QPushButton#ImportButton {
+                background: rgba(255, 255, 255, 0.04);
+                color: #dbeafe;
+                border: 1px dashed rgba(147, 197, 253, 0.45);
+                border-radius: 8px;
+                padding: 7px 10px;
+                font-weight: 600;
+            }
+            QPushButton#ImportButton:hover {
+                background: rgba(255, 255, 255, 0.08);
+                border-color: rgba(191, 219, 254, 0.8);
+            }
+            QPushButton#ImportButton:pressed {
+                background: rgba(255, 255, 255, 0.12);
+            }
+            QPushButton#HomeButton {
+                background: #f8fafc;
+                color: black;
+                border: 2px solid #0f172a;
+                border-radius: 16px;
+                min-width: 34px;
+                min-height: 34px;
+                max-width: 34px;
+                max-height: 34px;
+                font-size: 18px;
+                font-weight: 950;
+                padding: 0px;
+            }
+            QPushButton#HomeButton:hover {
+                background: #e2e8f0;
+                border-color: #1e293b;
+            }
+            QPushButton#HomeButton:pressed {
+                background: #cbd5e1;
+            }
+            QPushButton#PlusButton {
+                background: #f8fafc;
+                color: black;
+                border: 2px solid #0f172a;
+                border-radius: 16px;
+                min-width: 34px;
+                min-height: 34px;
+                max-width: 34px;
+                max-height: 34px;
+                font-size: 20px;
+                font-weight: 900;
+                padding: 0px;
+            }
+            QPushButton#PlusButton:hover {
+                background: #e2e8f0;
+                border-color: #1e293b;
+            }
+            QPushButton#PlusButton:pressed {
+                background: #cbd5e1;
+            }
+            QFrame#StatsCard QLabel#StatValue {
+                color: #f8fafc;
+                font-size: 11px;
+                font-weight: 700;
+                background: transparent;
+                border: none;
+            }
+            QFrame#StatsCard QLabel#StatHint {
+                color: #cbd5e1;
+                font-size: 9px;
+                background: transparent;
+                border: none;
+            }
         """)
 
         sidebar_layout = QVBoxLayout(sidebar)
@@ -196,16 +266,62 @@ class SegmentationViewer(QWidget):
         sidebar_layout.setSpacing(8)
 
         # Sidebar header
-        sidebar_eyebrow = QLabel("SEGMENTATION VIEWER")
-        sidebar_eyebrow.setObjectName("SidebarEyebrow")
         sidebar_title = QLabel("3D Visualization")
         sidebar_title.setObjectName("SidebarTitle")
         sidebar_subtitle = QLabel("Import segmentation file and adjust visualization parameters")
         sidebar_subtitle.setObjectName("SidebarSubtitle")
         sidebar_subtitle.setWordWrap(True)
 
-        sidebar_layout.addWidget(sidebar_eyebrow)
-        sidebar_layout.addWidget(sidebar_title)
+        sidebar_title_row = QHBoxLayout()
+        sidebar_title_row.setContentsMargins(0, 0, 0, 0)
+        sidebar_title_row.setSpacing(6)
+        sidebar_title_row.addWidget(sidebar_title)
+        sidebar_title_row.addStretch()
+
+        split_btn = QPushButton("+")
+        split_btn.setObjectName("PlusButton")
+        split_btn.setToolTip("Create split view")
+        split_btn.clicked.connect(self.request_split_view)
+        sidebar_title_row.addWidget(split_btn)
+
+        home_btn = QPushButton("⌂")
+        home_btn.setObjectName("HomeButton")
+        home_btn.setToolTip("Return to landing page")
+        home_btn.clicked.connect(self.go_back_to_landing_page)
+        sidebar_title_row.addWidget(home_btn)
+
+        # Close button (visible only when this pane is in split view)
+        close_btn = QPushButton("✕")
+        close_btn.setObjectName("CloseButton")
+        close_btn.setToolTip("Close this pane")
+        close_btn.setStyleSheet("""
+            QPushButton#CloseButton {
+                background: #f8fafc;
+                color: #0f172a;
+                border: 2px solid #0f172a;
+                border-radius: 16px;
+                min-width: 34px;
+                min-height: 34px;
+                max-width: 34px;
+                max-height: 34px;
+                font-size: 16px;
+                font-weight: 900;
+                padding: 0px;
+            }
+            QPushButton#CloseButton:hover {
+                background: #e2e8f0;
+                border-color: #1e293b;
+            }
+            QPushButton#CloseButton:pressed {
+                background: #cbd5e1;
+            }
+        """)
+        close_btn.clicked.connect(self.close_pane)
+        close_btn.setVisible(False)  # Hidden by default, shown only in split view
+        self.close_btn = close_btn
+        sidebar_title_row.addWidget(close_btn)
+
+        sidebar_layout.addLayout(sidebar_title_row)
         sidebar_layout.addWidget(sidebar_subtitle)
 
         # File info card
@@ -232,36 +348,13 @@ class SegmentationViewer(QWidget):
 
         sidebar_layout.addWidget(info_card)
 
-        # Display settings card
-        settings_card = QFrame()
-        settings_card.setObjectName("SidebarCard")
-        settings_card.setMinimumHeight(96)
-        settings_layout = QVBoxLayout(settings_card)
-        settings_layout.setContentsMargins(8, 8, 8, 8)
-        settings_layout.setSpacing(4)
-
-        settings_title = QLabel("Display Settings")
-        settings_title.setObjectName("CardTitle")
-        settings_layout.addWidget(settings_title)
-
-        # Background
-        bg_label = QLabel("Background")
-        bg_label.setStyleSheet("color: #cbd5e1; font-size: 9px; font-weight: 700; background: transparent; border: none;")
-        self.bg_combo = QComboBox()
-        self.bg_combo.addItem("White")
-        self.bg_combo.setCurrentIndex(0)
-        self.bg_combo.setEnabled(False)
-        settings_layout.addWidget(bg_label)
-        settings_layout.addWidget(self.bg_combo)
-
-        sidebar_layout.addWidget(settings_card)
-
         # Layers card
         layers_card = QFrame()
         layers_card.setObjectName("SidebarDarkCard")
+        layers_card.setMaximumHeight(305)
         layers_layout = QVBoxLayout(layers_card)
-        layers_layout.setContentsMargins(8, 8, 8, 8)
-        layers_layout.setSpacing(6)
+        layers_layout.setContentsMargins(8, 6, 8, 6)
+        layers_layout.setSpacing(4)
 
         layers_title = QLabel("Segmentation Layers")
         layers_title.setObjectName("DarkCardTitle")
@@ -274,13 +367,13 @@ class SegmentationViewer(QWidget):
                 QFrame {{
                     background: rgba(30, 41, 59, 0.6);
                     border: 1px solid #475569;
-                    border-radius: 7px;
+                    border-radius: 6px;
                     border-left: 4px solid {color_hex[label_id]};
                 }}
             """)
             layer_layout = QVBoxLayout(layer_widget)
-            layer_layout.setContentsMargins(7, 5, 7, 5)
-            layer_layout.setSpacing(3)
+            layer_layout.setContentsMargins(6, 4, 6, 4)
+            layer_layout.setSpacing(2)
 
             # Label with checkbox
             label_row = QHBoxLayout()
@@ -339,6 +432,57 @@ class SegmentationViewer(QWidget):
         viewer_layout.setContentsMargins(0, 0, 0, 0)
         viewer_layout.setSpacing(0)
 
+        stats_row = QHBoxLayout()
+        stats_row.setContentsMargins(10, 6, 10, 0)
+        stats_row.setSpacing(0)
+        stats_row.addStretch()
+
+        stats_card = QFrame()
+        stats_card.setObjectName("StatsCard")
+        stats_card.setMaximumWidth(240)
+        stats_card.setStyleSheet("""
+            QFrame#StatsCard {
+                background: rgba(15, 23, 42, 0.60);
+                border: 1px solid rgba(148, 163, 184, 0.22);
+                border-radius: 10px;
+            }
+        """)
+        stats_layout = QVBoxLayout(stats_card)
+        stats_layout.setContentsMargins(8, 8, 8, 8)
+        stats_layout.setSpacing(4)
+
+        stats_title = QLabel("Quick Statistics")
+        stats_title.setObjectName("CardTitle")
+        stats_layout.addWidget(stats_title)
+
+        stats_hint = QLabel("Load a segmentation file to refresh these values")
+        stats_hint.setObjectName("StatHint")
+        stats_hint.setWordWrap(True)
+        stats_layout.addWidget(stats_hint)
+
+        stats_rows = [
+            ("File", "No file loaded"),
+            ("Brain voxels", "0"),
+            ("Tumor voxels", "0"),
+            ("Tumor volume", "0.0 mm³"),
+        ]
+        for label_text, value_text in stats_rows:
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(6)
+            label = QLabel(label_text)
+            label.setStyleSheet("color: #93c5fd; font-size: 9px; font-weight: 700; background: transparent; border: none;")
+            value = QLabel(value_text)
+            value.setObjectName("StatValue")
+            value.setWordWrap(True)
+            row.addWidget(label)
+            row.addWidget(value, 1)
+            stats_layout.addLayout(row)
+            self.sidebar_stat_labels[label_text] = value
+
+        stats_row.addWidget(stats_card)
+        viewer_layout.addLayout(stats_row)
+
         # Placeholder shown while renderer initializes
         self.pv_widget = None
         self._renderer_placeholder = QLabel("Initializing 3D renderer...")
@@ -381,16 +525,32 @@ class SegmentationViewer(QWidget):
             self.pv_widget = QtInteractor(self.viewer_container)
             self.pv_widget.set_background("#ffffff")
 
+            # Improve lighting to reduce shadows
+            # Disable shadows for clearer visibility from all angles
+            self.pv_widget.disable_shadows()
+            
+            # Add headlight for even illumination (reduces dark areas from all angles)
+            self.pv_widget.add_light(pv.Light(intensity=0.8, light_type='headlight'))
+            self.pv_widget.add_light(pv.Light(intensity=0.35, light_type='scenelight'))
+
             # remove placeholder and add widget
             if getattr(self, "_renderer_placeholder", None) is not None:
                 self._renderer_placeholder.setParent(None)
                 self._renderer_placeholder = None
 
             self.viewer_container.layout().addWidget(self.pv_widget)
+            
+            # Add XYZ axes widget
+            self.pv_widget.show_axes()
+            
             self._picker = pv._vtk.vtkCellPicker()
             self._picker.SetTolerance(0.005)
             self.pv_widget.setMouseTracking(True)
             self.pv_widget.installEventFilter(self)
+
+            if self.seg_volume is not None and self.t1_volume is not None:
+                self.init_3d()
+
             self.pv_widget.render()
         except Exception as e:
             err = QLabel(f"3D Viewer init failed: {str(e)}")
@@ -410,21 +570,74 @@ class SegmentationViewer(QWidget):
         self.viewer_container.layout().addWidget(err)
 
     def import_seg_file(self):
+        self._import_seg_file_into(self)
+
+    def request_split_view(self):
+        if self.peer_viewer is not None and hasattr(self.peer_viewer, "ensure_split_view"):
+            self.peer_viewer.ensure_split_view()
+
+    def go_back_to_landing_page(self):
+        viewer = self.peer_viewer
+        if viewer is not None and hasattr(viewer, "go_to_landing_page"):
+            viewer.go_to_landing_page()
+            return
+
+        widget = self
+        while widget is not None:
+            if hasattr(widget, "show_landing_page"):
+                widget.show_landing_page()
+                return
+            widget = widget.parentWidget()
+
+    def close_pane(self):
+        """Close/hide this pane if it's the right pane in a split view."""
+        if self.peer_viewer is not None and hasattr(self.peer_viewer, "remove_pane"):
+            self.peer_viewer.remove_pane(self)
+
+    def import_seg_file_to_peer(self):
+        seg_file, t1_file = self._pick_segmentation_pair()
+        if not seg_file or not t1_file:
+            return
+
+        viewer = self.peer_viewer
+        if viewer is not None and hasattr(viewer, "ensure_split_view"):
+            target_viewer = viewer.ensure_split_view()
+        else:
+            target_viewer = viewer or self
+
+        try:
+            target_viewer.current_file = os.path.basename(seg_file)
+            target_viewer.file_label.setText(f"<b>Loaded:</b> {target_viewer.current_file}")
+            target_viewer.load_volumes(seg_file, t1_file)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load files: {str(e)}")
+
+    def set_peer_viewer(self, peer_viewer):
+        self.peer_viewer = peer_viewer
+
+    def _pick_segmentation_pair(self):
         seg_file, _ = QFileDialog.getOpenFileName(self, "Select Segmentation File", "", "*.nii.gz;;*.nii")
         if not seg_file:
-            return
+            return None, None
 
         folder = os.path.dirname(seg_file)
         t1_file = next((os.path.join(folder, f) for f in os.listdir(folder) if "t1" in f.lower()), None)
 
         if not t1_file:
             QMessageBox.critical(self, "Error", "T1 file not found in the same directory")
+            return None, None
+
+        return seg_file, t1_file
+
+    def _import_seg_file_into(self, target_viewer):
+        seg_file, t1_file = self._pick_segmentation_pair()
+        if not seg_file or not t1_file:
             return
 
         try:
-            self.current_file = os.path.basename(seg_file)
-            self.file_label.setText(f"<b>Loaded:</b> {self.current_file}")
-            self.load_volumes(seg_file, t1_file)
+            target_viewer.current_file = os.path.basename(seg_file)
+            target_viewer.file_label.setText(f"<b>Loaded:</b> {target_viewer.current_file}")
+            target_viewer.load_volumes(seg_file, t1_file)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load files: {str(e)}")
 
@@ -489,7 +702,12 @@ class SegmentationViewer(QWidget):
                     color=colors[0], 
                     opacity=self.layer_opacities[0],
                     edge_color=None,
-                    show_edges=False
+                    show_edges=False,
+                    smooth_shading=True,
+                    ambient=0.75,
+                    diffuse=0.55,
+                    specular=0.05,
+                    specular_power=10
                 )
                 self.actor_lookup[self._actor_key(self.meshes[0])] = 0
 
@@ -513,7 +731,12 @@ class SegmentationViewer(QWidget):
                         color=colors[label], 
                         opacity=self.layer_opacities[label],
                         edge_color=None,
-                        show_edges=False
+                        show_edges=False,
+                        smooth_shading=True,
+                        ambient=0.75,
+                        diffuse=0.55,
+                        specular=0.05,
+                        specular_power=10
                     )
                     self.actor_lookup[self._actor_key(self.meshes[label])] = label
 
@@ -535,10 +758,30 @@ class SegmentationViewer(QWidget):
             light2.SetIntensity(0.4)
             self.pv_widget.renderer.AddLight(light2)
             
+            self._refresh_sidebar_stats()
             self.pv_widget.render()
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to render 3D visualization: {str(e)}")
+
+    def _refresh_sidebar_stats(self):
+        """Update the compact sidebar statistics after a volume loads."""
+        file_label = self.sidebar_stat_labels.get("File")
+        if file_label is not None:
+            file_label.setText(self.current_file or "No file loaded")
+
+        brain_label = self.sidebar_stat_labels.get("Brain voxels")
+        if brain_label is not None:
+            brain_label.setText(f"{self.brain_volume_voxels:,}")
+
+        tumor_label = self.sidebar_stat_labels.get("Tumor voxels")
+        if tumor_label is not None:
+            tumor_label.setText(f"{self.tumor_volume_voxels:,}")
+
+        tumor_volume_label = self.sidebar_stat_labels.get("Tumor volume")
+        if tumor_volume_label is not None:
+            tumor_volume_mm3 = self.tumor_volume_voxels * self.voxel_volume_mm3
+            tumor_volume_label.setText(f"{tumor_volume_mm3:,.1f} mm³")
 
     def apply_display_settings(self):
         """Apply display settings like background color."""
@@ -550,9 +793,7 @@ class SegmentationViewer(QWidget):
 
     def eventFilter(self, obj, event):
         if obj is getattr(self, "pv_widget", None) and getattr(self, "_picker", None):
-            if event.type() == QEvent.MouseMove:
-                self._show_hover_info(event)
-            elif event.type() == QEvent.Leave:
+            if event.type() == QEvent.Leave:
                 QToolTip.hideText()
         return super().eventFilter(obj, event)
 
@@ -629,6 +870,177 @@ class SegmentationViewer(QWidget):
                 actor.SetVisibility(controls["checkbox"].isChecked())
 
         self.pv_widget.render()
+
+
+class SegmentationViewer(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("3D Segmentation Viewer - DeepNeuro")
+        self.setMinimumSize(1260, 720)
+
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(10)
+
+        self.left_pane = SegmentationPane()
+        self.right_pane = None
+        self.left_pane.set_peer_viewer(self)
+
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.setHandleWidth(10)
+        self.splitter.setChildrenCollapsible(False)
+
+        self.right_placeholder = QFrame()
+        self.right_placeholder.setMinimumWidth(0)
+        self.right_placeholder.setStyleSheet("background: transparent; border: none;")
+
+        self.splitter.addWidget(self.left_pane)
+        self.splitter.addWidget(self.right_placeholder)
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 0)
+        self.splitter.setSizes([1260, 0])
+
+        root.addWidget(self.splitter)
+
+    def ensure_split_view(self):
+        if self.right_pane is not None:
+            return self.right_pane
+
+        self.right_pane = SegmentationPane()
+        self.right_pane.set_peer_viewer(self)
+        self.left_pane.set_peer_viewer(self)
+
+        # Show close buttons now that we're in split view
+        self.left_pane.close_btn.setVisible(True)
+        self.right_pane.close_btn.setVisible(True)
+
+        old_placeholder = self.splitter.replaceWidget(1, self.right_pane)
+        if old_placeholder is not None:
+            old_placeholder.setParent(None)
+            old_placeholder.deleteLater()
+
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setSizes([630, 630])
+        return self.right_pane
+
+    def remove_pane(self, pane_widget):
+        """Remove the given pane (left or right). Keep remaining pane if present.
+
+        If removing the left pane and a right pane exists, shift the right pane
+        into the left position and clear the right side. If removing the right
+        pane, replace it with a placeholder.
+        """
+        # If request is to remove right pane
+        if pane_widget is self.right_pane:
+            # Hide close buttons
+            try:
+                self.left_pane.close_btn.setVisible(False)
+            except Exception:
+                pass
+            try:
+                self.right_pane.close_btn.setVisible(False)
+            except Exception:
+                pass
+
+            # Replace right pane with placeholder
+            placeholder = QFrame()
+            placeholder.setMinimumWidth(0)
+            placeholder.setStyleSheet("background: transparent; border: none;")
+            old = self.splitter.replaceWidget(1, placeholder)
+            if old is not None:
+                old.setParent(None)
+                old.deleteLater()
+            self.right_pane = None
+            self.splitter.setStretchFactor(0, 1)
+            self.splitter.setStretchFactor(1, 0)
+            self.splitter.setSizes([1260, 0])
+            return
+
+        # If request is to remove left pane
+        if pane_widget is self.left_pane:
+            if self.right_pane is not None:
+                # Move right pane into left slot
+                new_left = self.right_pane
+                # Replace left widget with new_left
+                old_left = self.splitter.replaceWidget(0, new_left)
+                if old_left is not None:
+                    old_left.setParent(None)
+                    old_left.deleteLater()
+
+                # Create placeholder on right
+                placeholder = QFrame()
+                placeholder.setMinimumWidth(0)
+                placeholder.setStyleSheet("background: transparent; border: none;")
+                old_right = self.splitter.replaceWidget(1, placeholder)
+                if old_right is not None and old_right is not new_left:
+                    old_right.setParent(None)
+                    old_right.deleteLater()
+
+                # Update references
+                self.left_pane = new_left
+                self.left_pane.set_peer_viewer(self)
+                self.right_pane = None
+
+                # Hide close buttons
+                try:
+                    self.left_pane.close_btn.setVisible(False)
+                except Exception:
+                    pass
+
+                self.splitter.setStretchFactor(0, 1)
+                self.splitter.setStretchFactor(1, 0)
+                self.splitter.setSizes([1260, 0])
+                return
+
+            # No right pane to keep; hide the whole viewer
+            try:
+                self.hide()
+            except Exception:
+                pass
+            return
+
+    def remove_right_pane(self):
+        """Remove/hide the right pane and return to single-pane view."""
+        if self.right_pane is None:
+            return
+
+        # Hide close buttons
+        self.left_pane.close_btn.setVisible(False)
+        self.right_pane.close_btn.setVisible(False)
+
+        # Create placeholder for right side
+        self.right_placeholder = QFrame()
+        self.right_placeholder.setMinimumWidth(0)
+        self.right_placeholder.setStyleSheet("background: transparent; border: none;")
+
+        # Replace right pane with placeholder
+        old_pane = self.splitter.replaceWidget(1, self.right_placeholder)
+        if old_pane is not None:
+            old_pane.setParent(None)
+            old_pane.deleteLater()
+
+        # Reset split factors
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 0)
+        self.splitter.setSizes([1260, 0])
+
+        self.right_pane = None
+
+    def open_secondary_view(self):
+        self.ensure_split_view()
+
+    def go_to_landing_page(self):
+        widget = self.parentWidget()
+        while widget is not None:
+            if hasattr(widget, "show_landing_page"):
+                widget.show_landing_page()
+                return
+            widget = widget.parentWidget()
+
+    def closeEvent(self, event):
+        self.hide()
+        event.ignore()
 
 
 if __name__ == "__main__":

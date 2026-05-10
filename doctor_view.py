@@ -11,8 +11,8 @@ from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                                QFrame, QSizePolicy, QMessageBox, QDialog, QFormLayout,
                                QLineEdit, QComboBox, QScrollArea, QPlainTextEdit,
-                               QApplication, QCompleter, QTableWidget, QTableWidgetItem, QHeaderView,
-                               QStackedWidget, QFileDialog, QGridLayout)
+                               QApplication, QTableWidget, QTableWidgetItem, QHeaderView,
+                               QStackedWidget, QFileDialog, QGridLayout, QCompleter, QListWidget)
 from api_client import api_client
 from doctor_view_parts import loaders as doctor_view_loaders
 from shared_loaders import DotSpinner
@@ -240,7 +240,7 @@ class DoctorView:
         spinner_layout.setSpacing(8)
         spinner_layout.setAlignment(Qt.AlignCenter)
 
-        loading_spinner = DotSpinner()
+        loading_spinner = DotSpinner(spinner_container)
         loading_spinner.start()
 
         loading_label = QLabel("Loading patients...")
@@ -489,19 +489,19 @@ class DoctorView:
                 border: 1px solid #6366f1;
             }
         """)
-        self.inbox_search_input.textChanged.connect(self.apply_inbox_filter)
+        self.inbox_search_input.textChanged.connect(lambda _: self.apply_inbox_filter())
 
         self.inbox_date_from = create_standard_date_filter_edit()
         self.inbox_date_to = create_standard_date_filter_edit()
 
-        self.inbox_date_from.dateChanged.connect(self._activate_inbox_date_filter)
-        self.inbox_date_to.dateChanged.connect(self._activate_inbox_date_filter)
+        self.inbox_date_from.dateChanged.connect(lambda _: self._activate_inbox_date_filter())
+        self.inbox_date_to.dateChanged.connect(lambda _: self._activate_inbox_date_filter())
 
         clear_date_btn = QPushButton("❌ Clear")
         clear_date_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
         clear_date_btn.setCursor(Qt.PointingHandCursor)
         clear_date_btn.setStyleSheet(DATE_FILTER_CLEAR_BUTTON_STYLESHEET)
-        clear_date_btn.clicked.connect(self.clear_inbox_date_filter)
+        clear_date_btn.clicked.connect(lambda: self.clear_inbox_date_filter())
         
         refresh_btn = QPushButton("🔄 Refresh")
         refresh_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
@@ -518,7 +518,7 @@ class DoctorView:
                 background: #e5e7eb;
             }
         """)
-        refresh_btn.clicked.connect(self.refresh_inbox)
+        refresh_btn.clicked.connect(lambda: self.refresh_inbox())
         
         header_layout.addWidget(title)
         header_layout.addWidget(subtitle)
@@ -632,7 +632,7 @@ class DoctorView:
         loading_layout.setSpacing(8)
         loading_layout.setAlignment(Qt.AlignCenter)
 
-        self.inbox_loading_spinner = DotSpinner()
+        self.inbox_loading_spinner = DotSpinner(loading_container)
         self.inbox_loading_spinner.start()
 
         loading_label = QLabel("Loading requests...")
@@ -952,6 +952,11 @@ class DoctorView:
                 self.expanded_patient_groups.add(patient_group_key)
             else:
                 self.expanded_patient_groups.discard(patient_group_key)
+            content_widget.updateGeometry()
+            container.adjustSize()
+            if self.requests_list_widget is not None:
+                self.requests_list_widget.adjustSize()
+                self.requests_list_widget.updateGeometry()
         
         expand_btn.clicked.connect(toggle_expand)
         
@@ -1595,12 +1600,9 @@ class DoctorView:
                 files_layout.addWidget(tests_title)
 
                 stored_test_names = request.get('uploaded_test_file_names') or []
-                tests_grid = QGridLayout()
+                tests_grid = QVBoxLayout()
                 tests_grid.setContentsMargins(0, 0, 0, 0)
-                tests_grid.setHorizontalSpacing(8)
-                tests_grid.setVerticalSpacing(8)
-                tests_grid.setColumnStretch(0, 1)
-                tests_grid.setColumnStretch(1, 1)
+                tests_grid.setSpacing(8)
 
                 for idx, file_path in enumerate(uploaded_tests):
                     display_name = ""
@@ -1624,8 +1626,11 @@ class DoctorView:
 
                     file_label = QLabel(f"📄 {display_name}")
                     file_label.setStyleSheet("color: #111827;")
-                    file_label.setWordWrap(True)
+                    file_label.setWordWrap(False)
                     file_label.setToolTip(display_name)
+                    fm = file_label.fontMetrics()
+                    elided = fm.elidedText(file_label.text(), Qt.ElideRight, 360)
+                    file_label.setText(elided)
                     file_row.addWidget(file_label)
                     file_row.addStretch()
 
@@ -1652,7 +1657,7 @@ class DoctorView:
                         )
                         file_row.addWidget(download_btn)
 
-                    tests_grid.addWidget(file_chip, idx // 2, idx % 2)
+                    tests_grid.addWidget(file_chip)
 
                 files_layout.addLayout(tests_grid)
 
@@ -2153,7 +2158,7 @@ class DoctorView:
         spinner_layout.setSpacing(8)
         spinner_layout.setAlignment(Qt.AlignCenter)
 
-        loading_spinner = DotSpinner()
+        loading_spinner = DotSpinner(spinner_container)
         loading_spinner.start()
 
         loading_label = QLabel("Loading case suggestions...")
@@ -2176,15 +2181,7 @@ class DoctorView:
         patient_id_display_map = {}
 
         patient_id = QLineEdit()
-        patient_id.setPlaceholderText("ID")
-        patient_id.setValidator(patient_id_validator)
-
-        # Add autocomplete for patient IDs (loaded in background)
-        patient_id_model = QStringListModel([])
-        patient_id_completer = QCompleter(patient_id_model)
-        patient_id_completer.setCaseSensitivity(Qt.CaseInsensitive)
-        patient_id_completer.setFilterMode(Qt.MatchContains)
-        patient_id.setCompleter(patient_id_completer)
+        patient_id.setPlaceholderText("Search or select patient ID")
 
         patient_name = QLineEdit()
         patient_name.setPlaceholderText("Full name")
@@ -2210,29 +2207,6 @@ class DoctorView:
         phone_number = QLineEdit()
         phone_number.setPlaceholderText("Phone number")
         phone_number.setMinimumWidth(180)
-        # Auto-fill patient fields when case ID is selected
-        def on_patient_id_selected(selected_text):
-            selected_text = str(selected_text or '').strip()
-            selected_patient_id = patient_id_display_map.get(selected_text, selected_text)
-            if not selected_patient_id and ' - ' in selected_text:
-                selected_patient_id = selected_text.split(' - ', 1)[0].strip()
-
-            if selected_patient_id in self.cases_dict:
-                case_data = self.cases_dict[selected_patient_id]
-                patient_name.setText(case_data['patient_name'])
-                patient_age.setText(str(case_data['patient_age']) if case_data['patient_age'] else "")
-                patient_email.setText(str(case_data.get('patient_email', '') or ''))
-                phone_number.setText(str(case_data.get('phone_number', '') or ''))
-
-                gender_value = str(case_data.get('patient_gender', '') or '')
-                gender_index = patient_gender.findText(gender_value)
-                if gender_index >= 0:
-                    patient_gender.setCurrentIndex(gender_index)
-
-                QTimer.singleShot(0, lambda pid=selected_patient_id: patient_id.setText(pid))
-        
-        # Trigger auto-fill when user selects from completer dropdown
-        patient_id_completer.activated[str].connect(on_patient_id_selected)
 
         diagnosis_type = QComboBox()
         diagnosis_type.setEditable(True)
@@ -2254,19 +2228,11 @@ class DoctorView:
         priority.addItems(["Routine", "Urgent"])
         priority.setCurrentIndex(-1)
 
-        # Radiologist field with searchable combo box
-        radiologist_combo = QComboBox()
-        radiologist_combo.setEditable(True)
-        radiologist_combo.setInsertPolicy(QComboBox.NoInsert)
-        radiologist_combo.lineEdit().setPlaceholderText("Search radiologist by name or email...")
-        radiologist_combo.setCurrentIndex(-1)
-
-        # Create autocomplete list (loaded in background)
-        radiologist_model = QStringListModel([])
-        completer = QCompleter(radiologist_model)
-        completer.setCaseSensitivity(Qt.CaseInsensitive)
-        completer.setFilterMode(Qt.MatchContains)
-        radiologist_combo.setCompleter(completer)
+        radiologist_input = QComboBox()
+        radiologist_input.setEditable(True)
+        radiologist_input.setInsertPolicy(QComboBox.NoInsert)
+        radiologist_input.lineEdit().setPlaceholderText("Search or select radiologist")
+        radiologist_input.setCurrentIndex(-1)
 
         description = QPlainTextEdit()
         description.setPlaceholderText("Add clinical notes, symptoms, or special instructions")
@@ -2321,7 +2287,7 @@ class DoctorView:
         form.addRow(contact_row)
         form.addRow(case_section_label)
         form.addRow(case_main_row)
-        form.addRow(radiologist_combo)
+        form.addRow(radiologist_input)
         form.addRow(description)
 
         actions = QHBoxLayout()
@@ -2390,15 +2356,22 @@ class DoctorView:
                 if continue_reply != QMessageBox.Yes:
                     return
 
-            if not radiologist_combo.currentText().strip():
+            if radiologist_input.currentIndex() < 0:
                 self.parent.show_message_box("Missing Information", "Radiologist field is required.", "warning")
                 return
             if not description.toPlainText().strip():
                 self.parent.show_message_box("Missing Information", "Please add a description.", "warning")
                 return
             
+            # Extract patient ID from field (format: "ID - Name")
+            patient_id_text = patient_id.text().strip()
+            if ' - ' in patient_id_text:
+                extracted_patient_id = patient_id_text.split(' - ')[0].strip()
+            else:
+                extracted_patient_id = patient_id_text
+            
             # Extract email from radiologist field (format: "Name (email)")
-            radiologist_text = radiologist_combo.currentText().strip()
+            radiologist_text = radiologist_input.currentText().strip()
             if '(' in radiologist_text and ')' in radiologist_text:
                 radiologist_email_value = radiologist_text[radiologist_text.rfind('(')+1:radiologist_text.rfind(')')].strip()
             elif '@' in radiologist_text and '.' in radiologist_text:
@@ -2412,7 +2385,7 @@ class DoctorView:
                 doctor_email=self.user_email,
                 doctor_name=self.user_name,
                 patient_name=patient_name.text().strip(),
-                patient_id=patient_id.text().strip(),
+                patient_id=extracted_patient_id,
                 patient_age=age_value,
                 patient_gender=patient_gender.currentText(),
                 patient_email=patient_email.text().strip(),
@@ -2487,26 +2460,113 @@ class DoctorView:
             self.cases_dict = cases_dict
             self.all_radiologists = radiologists
 
-            patient_id_display_map.clear()
-            patient_id_options = []
-            for case_id, case_data in cases_dict.items():
-                case_name = str(case_data.get('patient_name', '') or '').strip()
-                display_text = f"{case_id} - {case_name}" if case_name else case_id
-                patient_id_display_map[display_text] = case_id
-                patient_id_options.append(display_text)
+            # Populate radiologist dropdown with all available radiologists
+            try:
+                radiologist_input.blockSignals(True)
+                radiologist_input.clear()
+                for r in (radiologists or []):
+                    name = r.get('name') if isinstance(r, dict) else None
+                    email = r.get('email') if isinstance(r, dict) else None
+                    if name and email:
+                        radiologist_input.addItem(f"{name} ({email})")
+                    elif isinstance(r, str):
+                        radiologist_input.addItem(r)
+                radiologist_input.setCurrentIndex(-1)
+                radiologist_input.blockSignals(False)
+                
+                # Setup filtering as user types
+                def filter_radiologist_items(text):
+                    """Filter radiologist dropdown items based on text input"""
+                    search_text = text.lower()
+                    model = radiologist_input.model()
+                    for i in range(model.rowCount()):
+                        item = model.item(i)
+                        item_text = item.text().lower()
+                        is_match = search_text in item_text if search_text else True
+                        radiologist_input.view().setRowHidden(i, not is_match)
+                    
+                    # Auto-show dropdown when typing
+                    if text and not radiologist_input.view().isVisible():
+                        radiologist_input.showPopup()
+                
+                radiologist_input.editTextChanged.connect(filter_radiologist_items)
+                
+                # Setup autocomplete for patient_id with suggestions from cases_dict
+                from PySide6.QtWidgets import QCompleter
+                from PySide6.QtCore import Qt, QTimer
+                
+                patient_id_suggestions = []
+                seen_ids = set()
+                for pid, case_data in (cases_dict or {}).items():
+                    if pid and pid not in seen_ids:
+                        seen_ids.add(pid)
+                        display_text = f"{pid} - {case_data.get('patient_name', 'N/A')}"
+                        patient_id_suggestions.append(display_text)
+                
+                if patient_id_suggestions:
+                    completer = QCompleter(patient_id_suggestions)
+                    completer.setCaseSensitivity(Qt.CaseInsensitive)
+                    completer.setCompletionMode(QCompleter.PopupCompletion)
+                    patient_id.setCompleter(completer)
+                    # Autofill patient fields when a suggestion is chosen
+                    def populate_patient_fields_by_pid(pid):
+                        try:
+                            case = (self.cases_dict or {}).get(pid, {})
+                            if not case:
+                                return
+                            patient_name.setText(case.get('patient_name', '') or '')
+                            age_val = case.get('patient_age', '')
+                            patient_age.setText(str(age_val) if age_val is not None else '')
+                            gender_val = case.get('patient_gender', '') or ''
+                            if gender_val:
+                                gi = patient_gender.findText(gender_val)
+                                patient_gender.setCurrentIndex(gi if gi >= 0 else -1)
+                            else:
+                                patient_gender.setCurrentIndex(-1)
+                            patient_email.setText(case.get('patient_email', '') or '')
+                            phone_number.setText(case.get('phone_number', '') or '')
+                        except Exception:
+                            pass
 
-            patient_id_model.setStringList(patient_id_options)
-            radiologist_options = [f"{rad['name']} ({rad['email']})" for rad in radiologists]
-            radiologist_model.setStringList(radiologist_options)
+                    def on_completer_activated(text):
+                        try:
+                            pid = text.split(' - ')[0].strip() if text else ''
+                            if pid:
+                                # Use singleShot to override Qt's default completion
+                                QTimer.singleShot(0, lambda p=pid: (patient_id.setText(p), patient_id.setCursorPosition(len(p))))
+                                populate_patient_fields_by_pid(pid)
+                        except Exception:
+                            pass
 
-            # Populate combo dropdown so users can scroll/select entries.
-            current_text = radiologist_combo.currentText()
-            radiologist_combo.clear()
-            radiologist_combo.addItems(radiologist_options)
-            if current_text:
-                radiologist_combo.setEditText(current_text)
-            else:
-                radiologist_combo.setCurrentIndex(-1)
+                    try:
+                        completer.activated.connect(on_completer_activated)
+                    except Exception:
+                        # Fallback for older PySide versions with different signal signature
+                        try:
+                            completer.activated[str].connect(on_completer_activated)
+                        except Exception:
+                            pass
+
+                    # Also populate when user finishes editing the field (typed an ID)
+                    def on_patient_edit_finished():
+                        try:
+                            text = patient_id.text().strip()
+                            pid = text.split(' - ')[0].strip() if ' - ' in text else text
+                            if pid in (self.cases_dict or {}):
+                                # Normalize the field to only show the ID
+                                try:
+                                    patient_id.setText(pid)
+                                    patient_id.setCursorPosition(len(pid))
+                                except Exception:
+                                    pass
+                                populate_patient_fields_by_pid(pid)
+                        except Exception:
+                            pass
+
+                    patient_id.editingFinished.connect(on_patient_edit_finished)
+                
+            except Exception:
+                pass
 
             set_send_case_loading_state(False)
 

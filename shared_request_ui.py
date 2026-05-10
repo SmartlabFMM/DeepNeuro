@@ -1,9 +1,17 @@
 """Shared UI helpers for doctor/radiologist request detail dialogs."""
 
 from datetime import datetime
-from PySide6.QtCore import Qt, QDate, QLocale
+from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QDate, QLocale, Signal
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QAbstractSpinBox, QDateEdit, QFrame, QGridLayout, QLabel, QVBoxLayout
+from PySide6.QtWidgets import (
+    QCalendarWidget,
+    QAbstractSpinBox,
+    QDateEdit,
+    QFrame,
+    QGridLayout,
+    QLabel,
+    QVBoxLayout,
+)
 
 
 REQUEST_DETAILS_DIALOG_STYLESHEET = """
@@ -120,19 +128,92 @@ DATE_FILTER_CLEAR_BUTTON_STYLESHEET = """
 """
 
 
+class ClickableDateFilterEdit(QDateEdit):
+    """A date field that opens a calendar popup when clicked."""
+
+    dateChanged = Signal(QDate)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._date = QDate.currentDate()
+        self._popup = None
+
+        self.setCalendarPopup(False)
+        self.setDisplayFormat("dd/MM/yyyy")
+        self.setDate(QDate.currentDate())
+        self.setReadOnly(True)
+        self.lineEdit().setReadOnly(True)
+        self.lineEdit().setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.lineEdit().installEventFilter(self)
+        self.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def date(self):
+        return QDate(self._date)
+
+    def setDate(self, date_value):
+        if not isinstance(date_value, QDate) or not date_value.isValid():
+            return
+        if date_value == self._date:
+            super().setDate(date_value)
+            return
+        self._date = QDate(date_value)
+        super().setDate(date_value)
+        if not self.signalsBlocked():
+            self.dateChanged.emit(QDate(self._date))
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._show_popup()
+        super().mousePressEvent(event)
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+    def eventFilter(self, watched, event):
+        if watched is self.lineEdit() and event.type() == QEvent.MouseButtonPress:
+            if event.button() == Qt.LeftButton:
+                self._show_popup()
+                return True
+        return super().eventFilter(watched, event)
+
+    def _show_popup(self):
+        if self._popup is None:
+            self._popup = QFrame(self, Qt.Popup)
+            self._popup.setObjectName("DateFilterPopup")
+            self._popup.setFrameShape(QFrame.StyledPanel)
+            self._popup.setStyleSheet("background: white; border: 1px solid #c7d2fe; border-radius: 10px;")
+
+            popup_layout = QVBoxLayout(self._popup)
+            popup_layout.setContentsMargins(8, 8, 8, 8)
+            popup_layout.setSpacing(0)
+
+            self._calendar = QCalendarWidget(self._popup)
+            self._calendar.setGridVisible(True)
+            self._calendar.setLocale(QLocale(QLocale.English, QLocale.UnitedStates))
+            self._calendar.setSelectedDate(self._date)
+            self._calendar.clicked.connect(self._handle_calendar_clicked)
+            popup_layout.addWidget(self._calendar)
+
+        self._calendar.setSelectedDate(self._date)
+        popup_pos = self.mapToGlobal(QPoint(0, self.height() + 2))
+        self._popup.move(popup_pos)
+        self._popup.show()
+        self._popup.raise_()
+        self._popup.activateWindow()
+
+    def _handle_calendar_clicked(self, date_value):
+        self.setDate(date_value)
+        if self._popup is not None:
+            self._popup.close()
+
+
 def create_standard_date_filter_edit():
-    """Create a date edit configured for calendar-only filtering."""
-    date_edit = QDateEdit()
-    date_edit.setCalendarPopup(True)
-    date_edit.setDisplayFormat("dd/MM/yyyy")
-    date_edit.setDate(QDate.currentDate())
-    date_edit.setReadOnly(False)
-    date_edit.lineEdit().setReadOnly(True)
-    date_edit.setButtonSymbols(QAbstractSpinBox.NoButtons)
+    """Create a date picker configured for calendar-only filtering."""
+    date_edit = ClickableDateFilterEdit()
     date_edit.setLocale(QLocale(QLocale.English, QLocale.UnitedStates))
     date_edit.setFixedWidth(128)
     date_edit.setStyleSheet(DATE_FILTER_DATEEDIT_STYLESHEET)
-    date_edit.wheelEvent = lambda event: event.ignore()
     return date_edit
 
 
@@ -358,6 +439,8 @@ def create_grouped_request_card(patient_id, requests, card_creator_callback, exp
             expanded_groups_set.add(patient_group_key)
         else:
             expanded_groups_set.discard(patient_group_key)
+        content_widget.updateGeometry()
+        container.adjustSize()
     
     expand_btn.clicked.connect(toggle_expand)
     

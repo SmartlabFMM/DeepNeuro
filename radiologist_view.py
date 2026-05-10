@@ -42,6 +42,77 @@ class RadiologistView:
         self.radiologist_refresh_token = 0
         self.radiologist_click_guard_until = 0.0
         self.expanded_patient_groups = set()
+        # Cache for file sequence viewer data
+        self.sequence_view_cache = {}
+        self.sequence_view_cache_limit = 3
+
+    def _infer_file_modality(self, file_name):
+        """Infer medical imaging modality from file name (matching doctor view)."""
+        name = os.path.basename(str(file_name or "")).lower()
+        if not name:
+            return "file"
+
+        modality_patterns = [
+            ("seg", "seg"),
+            ("t2f", "t2f"),
+            ("t2flair", "t2f"),
+            ("flair", "flair"),
+            ("t2", "t2"),
+            ("t1ce", "t1ce"),
+            ("t1c", "t1c"),
+            ("t1gd", "t1c"),
+            ("t1", "t1"),
+        ]
+
+        for pattern, label in modality_patterns:
+            if pattern in name:
+                return label
+
+        stem = name
+        for suffix in (".nii.gz", ".nii", ".gz"):
+            if stem.endswith(suffix):
+                stem = stem[: -len(suffix)]
+                break
+        parts = [part for part in stem.replace("_", "-").split("-") if part]
+        return parts[-1] if parts else "file"
+
+    def _short_patient_id(self, patient_id):
+        """Return last 4 alphanumeric chars of patient ID (matching doctor view)."""
+        text = "".join(ch for ch in str(patient_id or "").strip() if ch.isalnum())
+        if not text:
+            return "N/A"
+        return text[-4:] if len(text) > 4 else text
+
+    def _format_viewer_file_name(self, request, raw_name, file_index=0):
+        """Format file name for viewer display (matching doctor view)."""
+        patient_name = clean_value(request.get("patient_name"))
+        patient_id = self._short_patient_id(request.get("patient_id"))
+        scan_date = clean_value(request.get("scan_date"))
+        modality = self._infer_file_modality(raw_name)
+
+        parts = [patient_name, patient_id, scan_date, modality]
+        formatted = "-".join(part for part in parts if part and part != "N/A")
+        if formatted:
+            return formatted
+
+        fallback = os.path.basename(str(raw_name or "")).strip()
+        return fallback if fallback else f"file-{file_index + 1}"
+
+    def _build_sequence_cache_key(self, request, uploaded_tests):
+        """Build a stable cache key for a case viewer payload (matching doctor view)."""
+        request_id = request.get('id')
+        refs = tuple(str(item).strip() for item in uploaded_tests if str(item).strip())
+        names = tuple(str(item).strip() for item in (request.get('uploaded_test_file_names') or []))
+        segmentation_ref = str(request.get('segmentation_file') or '').strip()
+        segmentation_name = str(request.get('segmentation_file_name') or '').strip()
+        return request_id, refs, names, segmentation_ref, segmentation_name
+
+    def _store_sequence_cache(self, cache_key, sequence_entries):
+        """Store case sequence data with a small FIFO cache (matching doctor view)."""
+        self.sequence_view_cache[cache_key] = sequence_entries
+        while len(self.sequence_view_cache) > self.sequence_view_cache_limit:
+            oldest_key = next(iter(self.sequence_view_cache))
+            self.sequence_view_cache.pop(oldest_key, None)
 
     def _update_completed_request_in_cache(
         self,
@@ -192,7 +263,7 @@ class RadiologistView:
 
 
     def _create_file_chip(self, file_path, request_id=None, file_type=None, file_index=0, display_name=None):
-        """Create a simple file-logo style chip for uploaded files with optional download button."""
+        """Create a consistent file chip matching doctor view styling."""
         chip = QFrame()
         chip.setStyleSheet("""
             QFrame {
@@ -205,15 +276,17 @@ class RadiologistView:
         row.setContentsMargins(10, 7, 10, 7)
         row.setSpacing(8)
 
-        icon_label = QLabel("📄")
-        icon_label.setFont(QFont("Segoe UI", 11))
         resolved_name = (str(display_name).strip() if display_name else "") or (os.path.basename(file_path) or file_path)
-        name_label = QLabel(resolved_name)
-        name_label.setStyleSheet("color: #0f172a; font-weight: 600;")
+        name_label = QLabel(f"📄 {resolved_name}")
+        name_label.setStyleSheet("color: #111827;")
+        name_label.setWordWrap(False)  # Consistent with doctor view
         name_label.setToolTip(resolved_name)
-        name_label.setWordWrap(True)
+        
+        # Apply elision for consistency with doctor view
+        fm = name_label.fontMetrics()
+        elided = fm.elidedText(name_label.text(), Qt.ElideRight, 360)
+        name_label.setText(elided)
 
-        row.addWidget(icon_label)
         row.addWidget(name_label)
         row.addStretch()
         
@@ -304,19 +377,19 @@ class RadiologistView:
                 border: 1px solid #6366f1;
             }
         """)
-        self.requests_search_input.textChanged.connect(self.apply_radiologist_filter)
+        self.requests_search_input.textChanged.connect(lambda _: self.apply_radiologist_filter())
 
         self.requests_date_from = create_standard_date_filter_edit()
         self.requests_date_to = create_standard_date_filter_edit()
 
-        self.requests_date_from.dateChanged.connect(self._activate_radiologist_date_filter)
-        self.requests_date_to.dateChanged.connect(self._activate_radiologist_date_filter)
+        self.requests_date_from.dateChanged.connect(lambda _: self._activate_radiologist_date_filter())
+        self.requests_date_to.dateChanged.connect(lambda _: self._activate_radiologist_date_filter())
 
         clear_date_btn = QPushButton("Clear")
         clear_date_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
         clear_date_btn.setCursor(Qt.PointingHandCursor)
         clear_date_btn.setStyleSheet(DATE_FILTER_CLEAR_BUTTON_STYLESHEET)
-        clear_date_btn.clicked.connect(self.clear_radiologist_date_filter)
+        clear_date_btn.clicked.connect(lambda: self.clear_radiologist_date_filter())
         
         refresh_btn = QPushButton("🔄 Refresh")
         refresh_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
@@ -333,7 +406,7 @@ class RadiologistView:
                 background: #e5e7eb;
             }
         """)
-        refresh_btn.clicked.connect(self.refresh_radiologist_requests)
+        refresh_btn.clicked.connect(lambda: self.refresh_radiologist_requests())
         
         header_layout.addWidget(title)
         header_layout.addWidget(subtitle)
@@ -447,7 +520,7 @@ class RadiologistView:
         loading_layout.setSpacing(8)
         loading_layout.setAlignment(Qt.AlignCenter)
 
-        self.radiologist_loading_spinner = radiologist_view_loaders.DotSpinner()
+        self.radiologist_loading_spinner = radiologist_view_loaders.DotSpinner(loading_container)
         self.radiologist_loading_spinner.start()
 
         loading_label = QLabel("Loading requests...")
@@ -746,6 +819,11 @@ class RadiologistView:
                 self.expanded_patient_groups.add(patient_group_key)
             else:
                 self.expanded_patient_groups.discard(patient_group_key)
+            content_widget.updateGeometry()
+            container.adjustSize()
+            if self.radiologist_requests_widget is not None:
+                self.radiologist_requests_widget.adjustSize()
+                self.radiologist_requests_widget.updateGeometry()
         
         expand_btn.clicked.connect(toggle_expand)
         
@@ -987,12 +1065,9 @@ class RadiologistView:
                 files_layout.addWidget(tests_title)
 
                 stored_test_names = request.get('uploaded_test_file_names') or []
-                tests_grid = QGridLayout()
+                tests_grid = QVBoxLayout()
                 tests_grid.setContentsMargins(0, 0, 0, 0)
-                tests_grid.setHorizontalSpacing(8)
-                tests_grid.setVerticalSpacing(8)
-                tests_grid.setColumnStretch(0, 1)
-                tests_grid.setColumnStretch(1, 1)
+                tests_grid.setSpacing(8)
 
                 for idx, file_path in enumerate(existing_tests):
                     display_name = ""
@@ -1000,6 +1075,9 @@ class RadiologistView:
                         display_name = str(stored_test_names[idx]).strip()
                     if not display_name:
                         display_name = os.path.basename(file_path) or file_path
+                    
+                    # Format file name consistently with doctor view
+                    display_name = self._format_viewer_file_name(request, display_name, idx)
 
                     chip = self._create_file_chip(
                         file_path,
@@ -1008,8 +1086,7 @@ class RadiologistView:
                         file_index=idx,
                         display_name=display_name,
                     )
-                    chip.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-                    tests_grid.addWidget(chip, idx // 2, idx % 2)
+                    tests_grid.addWidget(chip)
 
                 files_layout.addLayout(tests_grid)
 
@@ -1022,6 +1099,9 @@ class RadiologistView:
                 seg_value = str(request.get('segmentation_file'))
                 if not segmentation_name:
                     segmentation_name = os.path.basename(seg_value) or seg_value
+                
+                # Format segmentation file name consistently with doctor view
+                segmentation_name = self._format_viewer_file_name(request, segmentation_name, 0)
 
                 files_layout.addWidget(
                     self._create_file_chip(
@@ -1105,13 +1185,9 @@ class RadiologistView:
         files_section_title.setStyleSheet("color: #374151; font-weight: 700;")
 
         files_list_widget = QWidget()
-        files_list_layout = QGridLayout(files_list_widget)
+        files_list_layout = QVBoxLayout(files_list_widget)
         files_list_layout.setContentsMargins(0, 0, 0, 0)
-        files_list_layout.setSpacing(6)
-        files_list_layout.setHorizontalSpacing(8)
-        files_list_layout.setVerticalSpacing(6)
-        files_list_layout.setColumnStretch(0, 1)
-        files_list_layout.setColumnStretch(1, 1)
+        files_list_layout.setSpacing(8)
 
         empty_files_label = QLabel("No test files uploaded yet")
         empty_files_label.setStyleSheet("color: #9ca3af; font-style: italic;")
@@ -1123,21 +1199,18 @@ class RadiologistView:
                     item.widget().deleteLater()
 
             if not selected_test_files:
-                files_list_layout.addWidget(empty_files_label, 0, 0, 1, 2)
+                files_list_layout.addWidget(empty_files_label)
                 return
 
             if len(selected_test_files) not in (3, 4):
                 warning_label = QLabel("Please select 3 or 4 MRI files.")
                 warning_label.setStyleSheet("color: #b45309; font-weight: 600; padding: 8px;")
-                files_list_layout.addWidget(warning_label, 0, 0, 1, 2)
+                files_list_layout.addWidget(warning_label)
                 return
 
             for index, file_path in enumerate(selected_test_files):
-                row = index // 2
-                col = index % 2
                 chip = self._create_file_chip(file_path)
-                chip.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-                files_list_layout.addWidget(chip, row, col)
+                files_list_layout.addWidget(chip)
 
         upload_tests_btn = QPushButton("Upload MRI Files")
         upload_tests_btn.setCursor(Qt.PointingHandCursor)
