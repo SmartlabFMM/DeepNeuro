@@ -18,6 +18,9 @@ from PySide6.QtWidgets import (
     QSplitter,
     QVBoxLayout,
     QWidget,
+    QPushButton,
+    QFileDialog,
+    QMessageBox,
 )
 
 from shared_request_ui import clean_value
@@ -176,13 +179,27 @@ class CaseSequenceViewerDialog(QDialog):
         sidebar_eyebrow.setObjectName("SidebarEyebrow")
         sidebar_title = QLabel("Case Navigator")
         sidebar_title.setObjectName("SidebarTitle")
-        sidebar_subtitle = QLabel("Review metadata and drag test files from the selected scan date into any panel")
-        sidebar_subtitle.setObjectName("SidebarSubtitle")
-        sidebar_subtitle.setWordWrap(True)
 
         sidebar_header_layout.addWidget(sidebar_eyebrow)
         sidebar_header_layout.addWidget(sidebar_title)
-        sidebar_header_layout.addWidget(sidebar_subtitle)
+        # Upload tests button for adding local test files to the viewer
+        upload_btn = QPushButton("Upload Tests")
+        upload_btn.setCursor(Qt.PointingHandCursor)
+        upload_btn.setStyleSheet("""
+            QPushButton {
+                background: #10b981;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 6px 10px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background: #34d399;
+            }
+        """)
+        upload_btn.clicked.connect(self._on_upload_tests_clicked)
+        sidebar_header_layout.addWidget(upload_btn)
 
         case_card = QFrame()
         case_card.setObjectName("SidebarCard")
@@ -787,3 +804,39 @@ class CaseSequenceViewerDialog(QDialog):
             panel.slice_info_label.setText(
                 f"Slice {slice_index + 1}/{base_depth}  •  Shape {base_volume.shape[0]}x{base_volume.shape[1]}x{base_volume.shape[2]}"
             )
+
+    def _on_upload_tests_clicked(self):
+        """Open file dialog to select local test files and add them to the viewer."""
+        import nibabel as nib
+        import numpy as np
+
+        files, _ = QFileDialog.getOpenFileNames(self, "Select test files", "", "NIfTI Files (*.nii *.nii.gz);;All Files (*)")
+        if not files:
+            return
+
+        added = []
+        for fpath in files:
+            try:
+                volume = nib.load(fpath).get_fdata()
+                if volume.ndim > 3:
+                    volume = volume[..., 0]
+                if volume.ndim != 3:
+                    QMessageBox.warning(self, "Unsupported File", f"{os.path.basename(fpath)}: unsupported volume shape {getattr(volume, 'shape', None)}")
+                    continue
+                key = f"local:{os.path.basename(fpath)}:{len(self.sequence_by_key)}"
+                self.sequence_by_key[key] = {
+                    "name": os.path.basename(fpath),
+                    "volume": np.asarray(volume, dtype=np.float32),
+                }
+                added.append(os.path.basename(fpath))
+            except Exception as exc:
+                QMessageBox.warning(self, "Load Error", f"Failed to load {os.path.basename(fpath)}: {exc}")
+
+        if not added:
+            return
+
+        # Rebuild entries list and refresh UI
+        entries = [{"key": k, "name": v["name"], "volume": v["volume"]} for k, v in self.sequence_by_key.items()]
+        self._set_sequence_entries(entries, keep_assignments=True)
+        self.render_all_panels()
+        QMessageBox.information(self, "Upload Complete", f"Added {len(added)} test file(s).")

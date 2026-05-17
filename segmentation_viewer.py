@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 
 # Set OpenGL to software mode BEFORE any Qt imports to prevent VTK blocking
 # Advanced VTK/PyOpenGL overrides are platform-specific; only apply them on Linux
@@ -7,6 +8,18 @@ os.environ["QT_OPENGL"] = "software"
 if sys.platform.startswith("linux"):
     os.environ["QT_XCB_GL_INTEGRATION"] = "xcb_glx"
     os.environ["PYOPENGL_PLATFORM"] = "osmesa"  # Force off-screen Mesa rendering for VTK on Linux
+
+# Suppress VTK warnings
+os.environ["VTK_LOG_VERBOSITY"] = "OFF"
+
+# Suppress VTK logging at Python level
+logging.getLogger("vtkWin32OpenGLRenderWindow").setLevel(logging.CRITICAL)
+logging.getLogger("vtkOpenGLRenderWindow").setLevel(logging.CRITICAL)
+logging.getLogger("vtkRenderWindow").setLevel(logging.CRITICAL)
+# Suppress all root-level warnings from VTK
+logging.captureWarnings(False)
+for handler in logging.root.handlers[:]:
+    handler.addFilter(lambda record: "vtkWin32OpenGLRenderWindow" not in record.getMessage())
 
 import traceback
 from datetime import datetime
@@ -87,6 +100,10 @@ class SegmentationPane(QWidget):
         self.layer_opacities = {0: 0.15, 1: 0.85, 2: 0.8, 3: 0.9, 4: 0.85}
         self.sidebar_stat_labels = {}
         self.peer_viewer = None
+        self._case_segmentation_items = []
+        self._case_segmentation_selector = None
+        self._case_segmentation_display_btn = None
+        self._case_segmentation_callback = None
 
         # Main layout with splitter
         main_layout = QVBoxLayout(self)
@@ -341,10 +358,12 @@ class SegmentationPane(QWidget):
         self.file_label.setWordWrap(True)
         info_layout.addWidget(self.file_label)
 
-        import_btn = QPushButton("Import Segmentation File")
-        import_btn.setObjectName("ImportButton")
-        import_btn.clicked.connect(self.import_seg_file)
-        info_layout.addWidget(import_btn)
+        self.import_btn = QPushButton("Import Segmentation File")
+        self.import_btn.setObjectName("ImportButton")
+        self.import_btn.clicked.connect(self.import_seg_file)
+        info_layout.addWidget(self.import_btn)
+
+        self.info_layout = info_layout
 
         sidebar_layout.addWidget(info_card)
 
@@ -571,6 +590,68 @@ class SegmentationPane(QWidget):
 
     def import_seg_file(self):
         self._import_seg_file_into(self)
+
+    def configure_case_segmentation_selector(self, segmentations, current_index, on_display):
+        """Replace the import action with a segmentation selector for case-bound viewers."""
+        self.clear_case_segmentation_selector()
+
+        if not segmentations:
+            self.import_btn.setVisible(False)
+            self.file_label.setText("No segmentation files available")
+            return
+
+        self._case_segmentation_items = list(segmentations)
+        self._case_segmentation_callback = on_display
+        self.import_btn.setVisible(False)
+
+        selector = QComboBox()
+        selector.setMaxVisibleItems(12)
+        for idx, seg_info in enumerate(self._case_segmentation_items):
+            seg_name = seg_info.get("name", f"Segmentation {idx + 1}")
+            selector.addItem(seg_name, idx)
+
+        if 0 <= current_index < selector.count():
+            selector.setCurrentIndex(current_index)
+        selector.currentIndexChanged.connect(self._on_case_segmentation_changed)
+
+        display_btn = QPushButton("Display Selected")
+        display_btn.setObjectName("ImportButton")
+        display_btn.clicked.connect(self._display_selected_case_segmentation)
+
+        self._case_segmentation_selector = selector
+        self._case_segmentation_display_btn = display_btn
+        self.info_layout.addWidget(selector)
+        self.info_layout.addWidget(display_btn)
+
+        self._on_case_segmentation_changed(selector.currentIndex())
+
+    def clear_case_segmentation_selector(self):
+        if self._case_segmentation_selector is not None:
+            self._case_segmentation_selector.deleteLater()
+            self._case_segmentation_selector = None
+        if self._case_segmentation_display_btn is not None:
+            self._case_segmentation_display_btn.deleteLater()
+            self._case_segmentation_display_btn = None
+        self._case_segmentation_items = []
+        self._case_segmentation_callback = None
+        if hasattr(self, "import_btn"):
+            self.import_btn.setVisible(True)
+
+    def _on_case_segmentation_changed(self, index):
+        if index < 0 or index >= len(self._case_segmentation_items):
+            return
+        seg_info = self._case_segmentation_items[index]
+        seg_name = seg_info.get("name", f"Segmentation {index + 1}")
+        self.file_label.setText(f"Selected: {seg_name}")
+
+    def _display_selected_case_segmentation(self):
+        if self._case_segmentation_selector is None:
+            return
+        idx = self._case_segmentation_selector.currentIndex()
+        if idx < 0 or idx >= len(self._case_segmentation_items):
+            return
+        if callable(self._case_segmentation_callback):
+            self._case_segmentation_callback(idx, self._case_segmentation_items[idx])
 
     def request_split_view(self):
         if self.peer_viewer is not None and hasattr(self.peer_viewer, "ensure_split_view"):
@@ -914,8 +995,25 @@ class SegmentationViewer(QWidget):
         self.left_pane.close_btn.setVisible(True)
         self.right_pane.close_btn.setVisible(True)
 
-        old_placeholder = self.splitter.replaceWidget(1, self.right_pane)
-        if old_placeholder is not None:
+        # Use persistent placeholder and widget lookup instead of fixed index
+        placeholder_index = self.splitter.indexOf(self.right_placeholder)
+        if placeholder_index == -1:
+            # If placeholder lost parent, reattach it
+            if self.right_placeholder.parent() is not None:
+                self.right_placeholder.setParent(None)
+            if self.splitter.count() < 2:
+                self.splitter.addWidget(self.right_placeholder)
+            else:
+                self.splitter.insertWidget(1, self.right_placeholder)
+            placeholder_index = self.splitter.indexOf(self.right_placeholder)
+
+        if placeholder_index == -1:
+            # can't find slot to place right pane
+            self.right_pane = None
+            return None
+
+        old_placeholder = self.splitter.replaceWidget(placeholder_index, self.right_pane)
+        if old_placeholder is not None and old_placeholder is not self.right_placeholder:
             old_placeholder.setParent(None)
             old_placeholder.deleteLater()
 
@@ -943,18 +1041,38 @@ class SegmentationViewer(QWidget):
             except Exception:
                 pass
 
-            # Replace right pane with placeholder
-            placeholder = QFrame()
-            placeholder.setMinimumWidth(0)
-            placeholder.setStyleSheet("background: transparent; border: none;")
-            old = self.splitter.replaceWidget(1, placeholder)
-            if old is not None:
-                old.setParent(None)
-                old.deleteLater()
+            # Clear peer references in right pane (it's being deleted)
+            try:
+                self.right_pane.peer_viewer = None
+            except Exception:
+                pass
+
+            # Clear the left pane's peer_viewer to allow fresh split next time
+            try:
+                self.left_pane.peer_viewer = None
+            except Exception:
+                pass
+
+            # Replace right pane with persistent placeholder
+            placeholder_index = self.splitter.indexOf(self.right_pane)
+            if placeholder_index == -1:
+                placeholder_index = self.splitter.indexOf(self.right_placeholder)
+            if placeholder_index == -1:
+                # ensure placeholder exists
+                self.splitter.addWidget(self.right_placeholder)
+                placeholder_index = self.splitter.indexOf(self.right_placeholder)
+            else:
+                self.splitter.replaceWidget(placeholder_index, self.right_placeholder)
             self.right_pane = None
             self.splitter.setStretchFactor(0, 1)
             self.splitter.setStretchFactor(1, 0)
             self.splitter.setSizes([1260, 0])
+            
+            # Re-establish peer_viewer for left pane pointing to self (SegmentationViewer)
+            try:
+                self.left_pane.peer_viewer = self
+            except Exception:
+                pass
             return
 
         # If request is to remove left pane
@@ -962,20 +1080,24 @@ class SegmentationViewer(QWidget):
             if self.right_pane is not None:
                 # Move right pane into left slot
                 new_left = self.right_pane
-                # Replace left widget with new_left
-                old_left = self.splitter.replaceWidget(0, new_left)
-                if old_left is not None:
-                    old_left.setParent(None)
-                    old_left.deleteLater()
+                # Replace left widget with new_left using index lookup
+                left_index = self.splitter.indexOf(self.left_pane)
+                if left_index != -1:
+                    old_left = self.splitter.replaceWidget(left_index, new_left)
+                    if old_left is not None:
+                        old_left.setParent(None)
+                        old_left.deleteLater()
+                else:
+                    # left pane not found; abort
+                    return
 
-                # Create placeholder on right
-                placeholder = QFrame()
-                placeholder.setMinimumWidth(0)
-                placeholder.setStyleSheet("background: transparent; border: none;")
-                old_right = self.splitter.replaceWidget(1, placeholder)
-                if old_right is not None and old_right is not new_left:
-                    old_right.setParent(None)
-                    old_right.deleteLater()
+                # Ensure persistent placeholder occupies the right slot
+                right_index = self.splitter.indexOf(self.right_placeholder)
+                if right_index == -1:
+                    # insert placeholder after new left
+                    self.splitter.insertWidget(left_index + 1, self.right_placeholder)
+                elif right_index != left_index + 1:
+                    self.splitter.replaceWidget(right_index, self.right_placeholder)
 
                 # Update references
                 self.left_pane = new_left
@@ -1009,14 +1131,23 @@ class SegmentationViewer(QWidget):
         self.left_pane.close_btn.setVisible(False)
         self.right_pane.close_btn.setVisible(False)
 
-        # Create placeholder for right side
-        self.right_placeholder = QFrame()
-        self.right_placeholder.setMinimumWidth(0)
-        self.right_placeholder.setStyleSheet("background: transparent; border: none;")
+        # Ensure persistent placeholder exists for right side
+        if not hasattr(self, "right_placeholder") or self.right_placeholder is None:
+            self.right_placeholder = QFrame()
+            self.right_placeholder.setMinimumWidth(0)
+            self.right_placeholder.setStyleSheet("background: transparent; border: none;")
 
-        # Replace right pane with placeholder
-        old_pane = self.splitter.replaceWidget(1, self.right_placeholder)
-        if old_pane is not None:
+        # Replace right pane using index lookup
+        right_index = self.splitter.indexOf(self.right_pane)
+        if right_index == -1:
+            right_index = self.splitter.indexOf(self.right_placeholder)
+        if right_index == -1:
+            # attach placeholder at end
+            self.splitter.addWidget(self.right_placeholder)
+            right_index = self.splitter.indexOf(self.right_placeholder)
+
+        old_pane = self.splitter.replaceWidget(right_index, self.right_placeholder)
+        if old_pane is not None and old_pane is not self.right_placeholder:
             old_pane.setParent(None)
             old_pane.deleteLater()
 

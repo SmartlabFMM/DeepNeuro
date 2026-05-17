@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushB
                                QStackedWidget, QFileDialog, QGridLayout, QCompleter, QListWidget)
 from api_client import api_client
 from doctor_view_parts import loaders as doctor_view_loaders
+from segmentation_case_viewer import Segmentation3DCaseViewerDialog
 from shared_loaders import DotSpinner
 from shared_request_ui import (
     REQUEST_DETAILS_DIALOG_STYLESHEET,
@@ -52,6 +53,9 @@ class DoctorView:
         self.patients_loader = None
         self.sequence_view_cache = {}
         self.sequence_view_cache_limit = 3
+        self.patient_segmentation_cache = {}
+        self.patient_segmentation_cache_limit = 30
+        self.seg_3d_viewer = None
         
     def create_buttons_container(self):
         """Create container with diagnosis buttons for doctors"""
@@ -189,14 +193,50 @@ class DoctorView:
             }
         """)
 
+        delete_patient_btn = QPushButton("Delete Patient")
+        delete_patient_btn.setCursor(Qt.PointingHandCursor)
+        delete_patient_btn.setEnabled(False)
+        delete_patient_btn.setStyleSheet("""
+            QPushButton {
+                background: #ef4444;
+                color: white;
+            }
+            QPushButton:hover:enabled {
+                background: #dc2626;
+            }
+            QPushButton:disabled {
+                background: #fecaca;
+                color: #7f1d1d;
+            }
+        """)
+
+        view_medical_history_btn = QPushButton("View Medical History")
+        view_medical_history_btn.setCursor(Qt.PointingHandCursor)
+        view_medical_history_btn.setEnabled(False)
+        view_medical_history_btn.setStyleSheet("""
+            QPushButton {
+                background: #2563eb;
+                color: white;
+            }
+            QPushButton:hover:enabled {
+                background: #1d4ed8;
+            }
+            QPushButton:disabled {
+                background: #bfdbfe;
+                color: #1e3a8a;
+            }
+        """)
+
         actions.addLayout(title_block)
         actions.addStretch()
         actions.addWidget(filter_input)
         actions.addWidget(refresh_btn)
         actions.addWidget(add_patient_btn)
+        actions.addWidget(delete_patient_btn)
+        actions.addWidget(view_medical_history_btn)
 
         patients_table = QTableWidget()
-        patients_table.setColumnCount(10)
+        patients_table.setColumnCount(9)
         patients_table.setHorizontalHeaderLabels([
             "Patient ID",
             "Name",
@@ -206,8 +246,7 @@ class DoctorView:
             "Phone",
             "Has Conditions",
             "Conditions Notes",
-            "Created",
-            "Action"
+            "Created"
         ])
         patients_table.setEditTriggers(QTableWidget.NoEditTriggers)
         patients_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -224,7 +263,6 @@ class DoctorView:
         patients_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
         patients_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)
         patients_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeToContents)
-        patients_table.horizontalHeader().setSectionResizeMode(9, QHeaderView.ResizeToContents)
 
         content_stack = QStackedWidget()
 
@@ -266,6 +304,20 @@ class DoctorView:
         all_patients = []
         dialog_is_alive = {'value': True}
 
+        def selected_patient_id():
+            row_index = patients_table.currentRow()
+            if row_index < 0:
+                return ""
+            item = patients_table.item(row_index, 0)
+            if item is None:
+                return ""
+            return item.text().strip()
+
+        def update_patient_action_buttons():
+            has_selection = bool(selected_patient_id())
+            delete_patient_btn.setEnabled(has_selection)
+            view_medical_history_btn.setEnabled(has_selection)
+
         def on_delete_patient_click(patient_id):
             if not patient_id:
                 return
@@ -290,6 +342,20 @@ class DoctorView:
                 "warning"
             )
 
+        def on_delete_selected_patient_click():
+            on_delete_patient_click(selected_patient_id())
+
+        def on_view_medical_history_click():
+            if not selected_patient_id():
+                self.parent.show_message_box(
+                    "Select Patient",
+                    "Please select a patient first.",
+                    "warning"
+                )
+                return
+            dialog.accept()
+            self.parent.open_visualization_selector()
+
         def is_dialog_alive():
             return dialog_is_alive['value']
 
@@ -301,6 +367,11 @@ class DoctorView:
                 refresh_btn.setEnabled(not is_loading)
                 add_patient_btn.setEnabled(not is_loading)
                 filter_input.setEnabled(not is_loading)
+                if is_loading:
+                    delete_patient_btn.setEnabled(False)
+                    view_medical_history_btn.setEnabled(False)
+                else:
+                    update_patient_action_buttons()
                 if is_loading:
                     loading_spinner.start()
                 else:
@@ -332,26 +403,7 @@ class DoctorView:
                     item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
                     patients_table.setItem(row_index, col_index, item)
 
-                patient_id = str(patient.get('patient_id', '')).strip()
-                delete_btn = QPushButton("Delete")
-                delete_btn.setCursor(Qt.PointingHandCursor)
-                delete_btn.setFixedSize(64, 24)
-                delete_btn.setStyleSheet("""
-                    QPushButton {
-                        background: #ef4444;
-                        color: white;
-                        border-radius: 5px;
-                        border: none;
-                        padding: 2px 8px;
-                        font-size: 10px;
-                        font-weight: 700;
-                    }
-                    QPushButton:hover {
-                        background: #dc2626;
-                    }
-                """)
-                delete_btn.clicked.connect(lambda _checked=False, pid=patient_id: on_delete_patient_click(pid))
-                patients_table.setCellWidget(row_index, 9, delete_btn)
+            update_patient_action_buttons()
 
         def apply_patients_filter():
             query = filter_input.text().strip().lower()
@@ -416,7 +468,10 @@ class DoctorView:
 
         refresh_btn.clicked.connect(lambda: load_patients_async(show_error=True))
         add_patient_btn.clicked.connect(on_add_patient_click)
+        delete_patient_btn.clicked.connect(on_delete_selected_patient_click)
+        view_medical_history_btn.clicked.connect(on_view_medical_history_click)
         filter_input.textChanged.connect(lambda _: apply_patients_filter())
+        patients_table.itemSelectionChanged.connect(update_patient_action_buttons)
 
         card_layout.addLayout(actions)
         card_layout.addWidget(content_stack)
@@ -1666,15 +1721,31 @@ class DoctorView:
                 seg_title.setStyleSheet("color: #6b7280; font-weight: 700; margin-top: 8px;")
                 files_layout.addWidget(seg_title)
 
-                seg_row = QHBoxLayout()
                 seg_value = str(request.get('segmentation_file', 'N/A'))
                 seg_name = str(request.get('segmentation_file_name', '')).strip()
                 if not seg_name:
                     seg_name = os.path.basename(seg_value) or seg_value
                 seg_name = self._format_viewer_file_name(request, seg_name, 0)
+                seg_chip = QFrame()
+                seg_chip.setStyleSheet("""
+                    QFrame {
+                        background: #f8fafc;
+                        border: 1px solid #e2e8f0;
+                        border-radius: 8px;
+                    }
+                """)
+                seg_row = QHBoxLayout(seg_chip)
+                seg_row.setContentsMargins(10, 7, 10, 7)
+                seg_row.setSpacing(8)
+
                 seg_label = QLabel(f"📄 {seg_name}")
                 seg_label.setStyleSheet("color: #111827;")
                 seg_label.setWordWrap(True)
+                seg_label.setWordWrap(False)
+                seg_label.setToolTip(seg_name)
+                fm = seg_label.fontMetrics()
+                elided = fm.elidedText(seg_label.text(), Qt.ElideRight, 360)
+                seg_label.setText(elided)
                 seg_row.addWidget(seg_label)
 
                 if request.get('id'):
@@ -1683,14 +1754,14 @@ class DoctorView:
                     download_btn.setCursor(Qt.PointingHandCursor)
                     download_btn.setStyleSheet("""
                         QPushButton {
-                            background: #f0e7fe;
-                            color: #6b21a8;
+                            background: #e0f2fe;
+                            color: #0369a1;
                             border: none;
                             border-radius: 4px;
                             padding: 4px 8px;
                         }
                         QPushButton:hover {
-                            background: #e9d5ff;
+                            background: #bae6fd;
                         }
                     """)
                     download_btn.setFixedWidth(80)
@@ -1701,7 +1772,7 @@ class DoctorView:
                     seg_row.addWidget(download_btn)
 
                 seg_row.addStretch()
-                files_layout.addLayout(seg_row)
+                files_layout.addWidget(seg_chip)
 
             content_layout.addWidget(files_card)
 
@@ -1713,6 +1784,45 @@ class DoctorView:
         action_row.setSpacing(8)
         action_row.addStretch()
 
+        # Add 3D Segmentation button (enabled if this case or the patient has any segmentations)
+        segmentation_file = str(request.get('segmentation_file') or '').strip()
+        all_patient_segs = self._fetch_patient_segmentations(request.get('patient_id'))
+        has_any_segmentation = bool(segmentation_file) or bool(all_patient_segs)
+        seg_3d_btn = QPushButton("3D Segmentation Mask")
+        seg_3d_btn.setCursor(Qt.PointingHandCursor if has_any_segmentation else Qt.ForbiddenCursor)
+        seg_3d_btn.setStyleSheet("""
+            QPushButton {
+                background: #7c3aed;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: 600;
+            }
+            QPushButton:hover:enabled {
+                background: #6d28d9;
+            }
+            QPushButton:disabled {
+                background: #d1d5db;
+                color: #9ca3af;
+                border: 1px solid #e5e7eb;
+            }
+        """)
+        
+        if has_any_segmentation:
+            default_segmentation_id = segmentation_file or (all_patient_segs[0].get('id') if all_patient_segs else '')
+            seg_3d_btn.clicked.connect(
+                lambda checked, req=request, seg_id=default_segmentation_id:
+                self._open_segmentation_3d_viewer(req, seg_id)
+            )
+            seg_3d_btn.setEnabled(True)
+        else:
+            seg_3d_btn.setEnabled(False)
+            seg_3d_btn.setToolTip("No segmentation file available for this patient")
+        
+        action_row.addWidget(seg_3d_btn)
+
+        # Add Visualize Test Files button if there are uploaded test files
         if visualize_test_refs:
             visualize_btn = QPushButton("Visualize Test Files")
             visualize_btn.setCursor(Qt.PointingHandCursor)
@@ -1736,6 +1846,7 @@ class DoctorView:
             )
             action_row.addWidget(visualize_btn)
 
+
         close_btn = QPushButton("Close")
         close_btn.setCursor(Qt.PointingHandCursor)
         close_btn.setStyleSheet("""
@@ -1755,6 +1866,150 @@ class DoctorView:
         layout.addLayout(action_row)
 
         dialog.exec()
+
+    def _open_segmentation_3d_viewer(self, request, segmentation_file_id):
+        """Open 3D segmentation viewer with case info and mask navigation."""
+        # Build case info
+        case_info = {
+            'patient_id': request.get('patient_id', ''),
+            'patient_name': request.get('patient_name', ''),
+            'scan_date': request.get('scan_date', ''),
+            'created_at': request.get('created_at', ''),
+            'diagnosis_type': request.get('diagnosis_type', ''),
+            'status': request.get('status', ''),
+        }
+        
+        # Fetch all segmentations for this patient
+        all_patient_segs = self._fetch_patient_segmentations(request.get('patient_id'))
+        if not segmentation_file_id and all_patient_segs:
+            segmentation_file_id = all_patient_segs[0].get('id', '')
+        
+        def on_seg_selected(seg_info):
+            """Handle segmentation selection - download and load into the 3D viewer."""
+            if not seg_info:
+                return
+
+            # We expect seg_info to include a request_id for the case that owns the file
+            request_id = seg_info.get('request_id') or seg_info.get('request') or None
+            if not request_id:
+                self.parent.show_message_box("Load Failed", "Cannot determine source request for selected segmentation.", "warning")
+                return
+
+            # Download segmentation file to a temp path
+            seg_path, seg_err = self._download_attached_file_to_temp(request_id, 'segmentation', 0, seg_info.get('name'))
+            if not seg_path:
+                self.parent.show_message_box("Download Failed", f"Segmentation download failed: {seg_err}", "warning")
+                return
+
+            # Try to download an associated test/T1 file from same request (first test file)
+            t1_path, t1_err = self._download_attached_file_to_temp(request_id, 'test', 0, f"t1_{request_id}.nii.gz")
+            if not t1_path:
+                # If T1 not available, notify and allow user to import manually
+                self.parent.show_message_box(
+                    "T1 Not Found",
+                    "Associated T1 file not found for this request. You can import T1 manually after loading the segmentation.",
+                    "information"
+                )
+
+            # Load into viewer (left pane by default)
+            try:
+                wrapper = getattr(self, 'seg_3d_viewer', None)
+                if wrapper and getattr(wrapper, 'seg_viewer_wrapper', None):
+                    pane = wrapper.seg_viewer_wrapper.left_pane
+                else:
+                    pane = getattr(self.seg_3d_viewer, 'seg_viewer_wrapper', None) or None
+
+                if pane is None:
+                    # Fallback: try to reach left pane directly on dialog
+                    wrapper_obj = getattr(self.seg_3d_viewer, 'seg_viewer_wrapper', None)
+                    pane = getattr(wrapper_obj, 'left_pane', None)
+
+                # The SegmentationPane exposes load_volumes(seg, t1)
+                if hasattr(pane, 'load_volumes'):
+                    pane.current_file = os.path.basename(seg_path)
+                    try:
+                        pane.file_label.setText(f"<b>Loaded:</b> {pane.current_file}")
+                    except Exception:
+                        pass
+                    pane.load_volumes(seg_path, t1_path if t1_path else seg_path)
+                else:
+                    self.parent.show_message_box("Load Failed", "Viewer pane not available to load segmentation.", "warning")
+            except Exception as e:
+                self.parent.show_message_box("Load Failed", f"Failed to load segmentation: {e}", "warning")
+        
+        self.seg_3d_viewer = Segmentation3DCaseViewerDialog(
+            self.parent,
+            case_info=case_info,
+            segmentation_file_id=segmentation_file_id,
+            all_patient_segmentations=all_patient_segs,
+            on_segmentation_selected=on_seg_selected
+        )
+        self.seg_3d_viewer.exec()
+    
+    def _fetch_patient_segmentations(self, patient_id):
+        """Fetch all segmentation files for a patient."""
+        if not patient_id:
+            return []
+
+        patient_key = str(patient_id).strip()
+        cached_segmentations = self.patient_segmentation_cache.get(patient_key)
+        if cached_segmentations is not None:
+            return list(cached_segmentations)
+
+        in_memory_cases = [
+            case for case in self.inbox_all_requests
+            if str(case.get('patient_id', '')).strip() == patient_key
+        ]
+
+        if in_memory_cases:
+            segmentations = []
+            for case in in_memory_cases:
+                seg_file = str(case.get('segmentation_file', '')).strip()
+                if seg_file:
+                    segmentations.append({
+                        'id': seg_file,
+                        'request_id': case.get('id'),
+                        'name': case.get('segmentation_file_name', 'Segmentation'),
+                        'created_at': case.get('created_at', ''),
+                    })
+
+            self.patient_segmentation_cache[patient_key] = list(segmentations)
+            while len(self.patient_segmentation_cache) > self.patient_segmentation_cache_limit:
+                oldest_key = next(iter(self.patient_segmentation_cache))
+                self.patient_segmentation_cache.pop(oldest_key, None)
+
+            return segmentations
+        
+        try:
+            # Use the full doctor request list because the previous-cases endpoint only
+            # returns patient summary fields and does not include segmentation metadata.
+            response, _ = api_client.get_doctor_requests(self.user_email)
+            if not response.get('success'):
+                return []
+            
+            cases = response.get('requests', []) or response.get('cases', [])
+            patient_cases = [case for case in cases if str(case.get('patient_id', '')).strip() == patient_key]
+            
+            segmentations = []
+            for case in patient_cases:
+                seg_file = str(case.get('segmentation_file', '')).strip()
+                if seg_file:
+                    segmentations.append({
+                        'id': seg_file,
+                        'request_id': case.get('id'),
+                        'name': case.get('segmentation_file_name', 'Segmentation'),
+                        'created_at': case.get('created_at', ''),
+                    })
+            
+            self.patient_segmentation_cache[patient_key] = list(segmentations)
+            while len(self.patient_segmentation_cache) > self.patient_segmentation_cache_limit:
+                oldest_key = next(iter(self.patient_segmentation_cache))
+                self.patient_segmentation_cache.pop(oldest_key, None)
+
+            return segmentations
+        except Exception as e:
+            print(f"Error fetching patient segmentations: {e}")
+            return []
 
     def open_add_patient_form(self, on_success=None):
         """Open the add patient dialog for doctors"""
@@ -2380,36 +2635,53 @@ class DoctorView:
                 self.parent.show_message_box("Missing Information", "Please select a valid radiologist.", "warning")
                 return
             
-            # Submit via API
-            response, status_code = api_client.submit_diagnosis_request(
-                doctor_email=self.user_email,
-                doctor_name=self.user_name,
-                patient_name=patient_name.text().strip(),
-                patient_id=extracted_patient_id,
-                patient_age=age_value,
-                patient_gender=patient_gender.currentText(),
-                patient_email=patient_email.text().strip(),
-                phone_number=phone_number.text().strip(),
-                diagnosis_type=diagnosis_type.currentText(),
-                scan_date=datetime.now().strftime("%d-%m-%Y"),
-                priority=priority.currentText(),
-                radiologist_email=radiologist_email_value,
-                description=description.toPlainText().strip()
-            )
+            # Disable submit button during send
+            send_btn.setEnabled(False)
+            cancel_btn.setEnabled(False)
+            original_btn_text = send_btn.text()
+            send_btn.setText("Sending...")
+            QApplication.processEvents()
             
-            dialog.accept()
-            
-            if response.get('success'):
-                self.refresh_inbox()
-                self.parent.show_message_box(
-                    "Case Sent",
-                    response.get('message', 'The case has been sent to the selected radiologist.'),
-                    "information"
+            # Submit via API (synchronous - now with 60 second timeout)
+            try:
+                response, status_code = api_client.submit_diagnosis_request(
+                    doctor_email=self.user_email,
+                    doctor_name=self.user_name,
+                    patient_name=patient_name.text().strip(),
+                    patient_id=extracted_patient_id,
+                    patient_age=age_value,
+                    patient_gender=patient_gender.currentText(),
+                    patient_email=patient_email.text().strip(),
+                    phone_number=phone_number.text().strip(),
+                    diagnosis_type=diagnosis_type.currentText(),
+                    scan_date=datetime.now().strftime("%d-%m-%Y"),
+                    priority=priority.currentText(),
+                    radiologist_email=radiologist_email_value,
+                    description=description.toPlainText().strip()
                 )
-            else:
+                
+                dialog.accept()
+                
+                if response.get('success'):
+                    self.refresh_inbox()
+                    self.parent.show_message_box(
+                        "Case Sent",
+                        response.get('message', 'The case has been sent to the selected radiologist.'),
+                        "information"
+                    )
+                else:
+                    self.parent.show_message_box(
+                        "Error",
+                        response.get('message', 'Failed to save the case. Please try again.'),
+                        "critical"
+                    )
+            except Exception as e:
+                send_btn.setEnabled(True)
+                cancel_btn.setEnabled(True)
+                send_btn.setText(original_btn_text)
                 self.parent.show_message_box(
                     "Error",
-                    response.get('message', 'Failed to save the case. Please try again.'),
+                    f'Error: {str(e)}',
                     "critical"
                 )
 

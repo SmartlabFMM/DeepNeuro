@@ -826,6 +826,17 @@ class LandingPage(QMainWindow):
             self.show_segmentation_viewer()
             return
 
+        if mode == "2D":
+            try:
+                from doctor_view_parts import viewer as doctor_view_viewer
+                # Open the 2D case sequence viewer dialog (empty initially).
+                viewer_dialog = doctor_view_viewer.CaseSequenceViewerDialog(self, [], case_info={})
+                viewer_dialog.exec()
+                return
+            except Exception as e:
+                self.show_message_box("Error", f"Failed to open 2D viewer: {e}", "critical")
+                return
+
         self.show_message_box(
             "Coming Soon",
             f"{mode} visualization for {disease_type} is not available yet.\n\n"

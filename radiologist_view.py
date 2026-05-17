@@ -324,7 +324,9 @@ class RadiologistView:
         layout.setContentsMargins(0, 10, 0, 0)
         
         # Radiologist sees imaging analysis options
-        self.btn_upload = self.parent.create_diagnosis_button("Upload Test", "#10b981")
+        # Change 'Upload Test' to 'Visualize Medical Records' so radiologists
+        # can open the shared 2D/3D visualization selector like doctors.
+        self.btn_upload = self.parent.create_diagnosis_button("Visualize Medical Records", "#6366f1")
         self.btn_imaging = self.parent.create_diagnosis_button("Image Analysis", "#8b5cf6")
         self.btn_report = self.parent.create_diagnosis_button("Generate Report", "#f59e0b")
         
@@ -385,7 +387,7 @@ class RadiologistView:
         self.requests_date_from.dateChanged.connect(lambda _: self._activate_radiologist_date_filter())
         self.requests_date_to.dateChanged.connect(lambda _: self._activate_radiologist_date_filter())
 
-        clear_date_btn = QPushButton("Clear")
+        clear_date_btn = QPushButton("❌ Clear")
         clear_date_btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
         clear_date_btn.setCursor(Qt.PointingHandCursor)
         clear_date_btn.setStyleSheet(DATE_FILTER_CLEAR_BUTTON_STYLESHEET)
@@ -1016,7 +1018,9 @@ class RadiologistView:
 
         content_layout.addWidget(make_section_card("Patient Information", patient_rows))
         content_layout.addWidget(make_section_card("Medical Information", medical_rows))
-        content_layout.addWidget(make_section_card("Case Information", case_rows))
+        case_info_card = make_section_card("Case Information", case_rows)
+        case_info_card.setMinimumHeight(240)
+        content_layout.addWidget(case_info_card)
 
         if request.get('description'):
             desc_card = QFrame()
@@ -1293,12 +1297,60 @@ class RadiologistView:
                 )
                 return
 
-            response, _ = api_client.generate_glioma_segmentation(
-                flair_file=modality_paths['flair'],
-                t1_file=modality_paths['t1'],
-                t1ce_file=modality_paths['t1ce'],
-                t2_file=modality_paths['t2'],
-            )
+            # Show loading dialog
+            loading_dialog = QDialog(dialog)
+            loading_dialog.setWindowTitle("Generating Segmentation")
+            loading_dialog.setFixedSize(400, 180)
+            loading_dialog.setStyleSheet("""
+                QDialog {
+                    background: #f8fafc;
+                }
+            """)
+            loading_dialog.setWindowFlags(loading_dialog.windowFlags() & ~Qt.WindowCloseButtonHint)
+            loading_layout = QVBoxLayout(loading_dialog)
+            loading_layout.setContentsMargins(20, 20, 20, 20)
+            loading_layout.setSpacing(16)
+
+            status_label = QLabel("Processing MRI modalities and generating segmentation...")
+            status_label.setStyleSheet("color: #111827; font-weight: 600;")
+            status_label.setFont(QFont("Segoe UI", 10))
+            loading_layout.addWidget(status_label)
+
+            from PySide6.QtWidgets import QProgressBar
+            progress_bar = QProgressBar()
+            progress_bar.setRange(0, 0)  # Indeterminate progress
+            progress_bar.setStyleSheet("""
+                QProgressBar {
+                    border: 1px solid #e5e7eb;
+                    border-radius: 6px;
+                    background: #f3f4f6;
+                    height: 8px;
+                }
+                QProgressBar::chunk {
+                    background: #2563eb;
+                    border-radius: 6px;
+                }
+            """)
+            loading_layout.addWidget(progress_bar)
+
+            loading_layout.addStretch()
+            hint_label = QLabel("This may take 1-2 minutes...")
+            hint_label.setStyleSheet("color: #6b7280; font-size: 9px;")
+            loading_layout.addWidget(hint_label)
+
+            # Show loading dialog and process events
+            loading_dialog.show()
+            QApplication.processEvents()
+
+            try:
+                response, _ = api_client.generate_glioma_segmentation(
+                    flair_file=modality_paths['flair'],
+                    t1_file=modality_paths['t1'],
+                    t1ce_file=modality_paths['t1ce'],
+                    t2_file=modality_paths['t2'],
+                )
+            finally:
+                loading_dialog.close()
 
             if response.get('success'):
                 segmentation_file_input.setText(response.get('file_path', ''))
