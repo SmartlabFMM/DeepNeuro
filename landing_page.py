@@ -606,19 +606,15 @@ class LandingPage(QMainWindow):
 
     def handle_profile(self):
         """Handle profile button click"""
-        self.show_message_box(
-            "Profile",
-            "Profile details will be available here soon.",
-            "information"
-        )
+        from profile_settings import ProfileWindow
+        profile_window = ProfileWindow(self, self.user_email, self.user_name, self.user_type)
+        profile_window.exec()
 
     def handle_settings(self):
         """Handle settings button click"""
-        self.show_message_box(
-            "Settings",
-            "Settings will be available here soon.",
-            "information"
-        )
+        from profile_settings import SettingsWindow
+        settings_window = SettingsWindow(self, self.user_email, self.user_name, self.user_type)
+        settings_window.exec()
 
     def handle_diagnosis_click(self, diagnosis_type):
         """Handle diagnosis button click"""
