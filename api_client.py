@@ -363,6 +363,19 @@ class APIClient:
         except Exception as e:
             return {'success': False, 'message': f'Error: {str(e)}'}, 500
     
+    # Profile and Settings endpoints
+    def get_user_profile(self, email):
+        """Get user profile information"""
+        return self._make_request('GET', f'/api/auth/profile/{email}')
+    
+    def get_user_settings(self, email):
+        """Get user settings"""
+        return self._make_request('GET', f'/api/auth/settings/{email}')
+    
+    def save_user_settings(self, settings_data):
+        """Save user settings"""
+        return self._make_request('POST', '/api/auth/settings', json=settings_data)
+    
     # Utility methods
     @staticmethod
     def generate_verification_code(length=6):
