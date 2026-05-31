@@ -324,6 +324,84 @@ class APIClient:
         except Exception as e:
             return {'success': False, 'message': f'Error: {str(e)}'}, 500
 
+    def generate_ischemia_segmentation(self, adc_file, dwi_file=None, save_path=None):
+        """Generate an ischemic stroke segmentation from ADC (+ optional DWI) volume files."""
+        try:
+            segmentation_timeout = int(os.environ.get('ISCHEMIA_SEGMENTATION_TIMEOUT', 120))
+
+            if not adc_file or not os.path.exists(adc_file):
+                return {'success': False, 'message': 'ADC file not found'}, 400
+
+            files = {'adc': (os.path.basename(adc_file), open(adc_file, 'rb'))}
+            file_handles = [files['adc'][1]]
+
+            if dwi_file:
+                if not os.path.exists(dwi_file):
+                    # close opened handles
+                    for fh in file_handles:
+                        try:
+                            fh.close()
+                        except Exception:
+                            pass
+                    return {'success': False, 'message': 'DWI file not found'}, 400
+                files['dwi'] = (os.path.basename(dwi_file), open(dwi_file, 'rb'))
+                file_handles.append(files['dwi'][1])
+
+            try:
+                response = requests.post(
+                    f"{self.base_url}/api/models/ischemia/segment",
+                    files=files,
+                    timeout=segmentation_timeout,
+                    stream=True,
+                )
+
+                if response.status_code == 200:
+                    filename = self._extract_filename(response, default_name='ischemia_segmentation.nii.gz')
+                    if not save_path:
+                        temp_dir = os.path.join(tempfile.gettempdir(), 'DeepNeuro', 'generated_segmentations')
+                        os.makedirs(temp_dir, exist_ok=True)
+                        save_path = os.path.join(temp_dir, filename)
+                        if os.path.exists(save_path):
+                            name_root, ext = os.path.splitext(filename)
+                            if name_root.endswith('.nii') and ext == '.gz':
+                                name_root = name_root[:-4]
+                                ext = '.nii.gz'
+
+                            counter = 2
+                            while os.path.exists(save_path):
+                                save_path = os.path.join(temp_dir, f"{name_root}_{counter}{ext}")
+                                counter += 1
+                    else:
+                        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+                    with open(save_path, 'wb') as file_handle:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                file_handle.write(chunk)
+
+                    return {
+                        'success': True,
+                        'message': 'Segmentation generated successfully',
+                        'file_path': save_path,
+                        'filename': filename,
+                    }, 200
+
+                return self._parse_json_response(response, fallback_message='Segmentation generation failed')
+
+            finally:
+                for fh in file_handles:
+                    try:
+                        fh.close()
+                    except Exception:
+                        pass
+
+        except requests.exceptions.ConnectionError:
+            return {'success': False, 'message': 'Failed to connect to server'}, 500
+        except requests.exceptions.Timeout:
+            return {'success': False, 'message': 'Request timeout'}, 500
+        except Exception as e:
+            return {'success': False, 'message': f'Error: {str(e)}'}, 500
+
     def get_uploaded_files(self, uploaded_by_email=None, related_entity_id=None):
         """Fetch uploaded file metadata from the backend API."""
         params = {}

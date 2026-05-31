@@ -363,6 +363,18 @@ class SegmentationPane(QWidget):
         self.import_btn.clicked.connect(self.import_seg_file)
         info_layout.addWidget(self.import_btn)
 
+        # Segmentation mode selector (Auto / Tumor / Ischemia)
+        self.segmentation_mode_selector = QComboBox()
+        self.segmentation_mode_selector.addItem("Auto-Detect", "auto")
+        self.segmentation_mode_selector.addItem("Tumor (0-4)", "tumor")
+        self.segmentation_mode_selector.addItem("Ischemia (0-1)", "ischemia")
+        self.segmentation_mode_selector.setCurrentIndex(0)
+        self.segmentation_mode_selector.currentIndexChanged.connect(self.on_segmentation_mode_changed)
+        info_layout.addWidget(self.segmentation_mode_selector)
+
+        # Internal mode state: 'auto', 'tumor', or 'ischemia'
+        self.segmentation_mode = 'auto'
+
         self.info_layout = info_layout
 
         sidebar_layout.addWidget(info_card)
@@ -733,6 +745,16 @@ class SegmentationPane(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load volume data: {str(e)}")
 
+    def on_segmentation_mode_changed(self, index):
+        mode = self.segmentation_mode_selector.currentData()
+        self.segmentation_mode = mode
+        # If volumes are loaded, re-render using the selected interpretation
+        if self.seg_volume is not None and self.t1_volume is not None:
+            try:
+                self.init_3d()
+            except Exception:
+                pass
+
     def init_3d(self):
         """Initialize 3D visualization with enhanced meshes."""
         if self.pv_widget is None:
@@ -749,9 +771,31 @@ class SegmentationPane(QWidget):
             threshold = np.percentile(t1_normalized, 15)
             brain_mask = t1_normalized >= threshold
             self.brain_volume_voxels = int(np.count_nonzero(brain_mask))
-            self.tumor_volume_voxels = int(np.count_nonzero(np.isin(self.seg_volume, [1, 2, 3, 4])))
 
-            for label in [1, 2, 3, 4]:
+            # Determine which labels represent lesion regions for this segmentation.
+            present_labels = sorted(list(np.unique(self.seg_volume).astype(int)))
+
+            if self.segmentation_mode == 'ischemia':
+                # Force interpret as ischemia (label 1 == lesion)
+                class_labels[1] = "Ischemic Lesion"
+                colors[1] = [1.0, 0.1, 0.1]
+                color_hex[1] = "#FF1A1A"
+                lesion_labels = [1]
+            elif self.segmentation_mode == 'tumor':
+                lesion_labels = [l for l in [1, 2, 3, 4] if l in present_labels]
+            else:
+                # Auto mode: if only {0,1} present, treat as ischemia; otherwise tumor labels
+                if set(present_labels).issubset({0, 1}):
+                    class_labels[1] = "Ischemic Lesion"
+                    colors[1] = [1.0, 0.1, 0.1]
+                    color_hex[1] = "#FF1A1A"
+                    lesion_labels = [1]
+                else:
+                    lesion_labels = [l for l in [1, 2, 3, 4] if l in present_labels]
+
+            self.tumor_volume_voxels = int(np.count_nonzero(np.isin(self.seg_volume, lesion_labels)))
+
+            for label in lesion_labels:
                 voxels = int(np.count_nonzero(self.seg_volume == label))
                 self.region_stats[label] = {
                     "voxels": voxels,
@@ -792,14 +836,14 @@ class SegmentationPane(QWidget):
                 )
                 self.actor_lookup[self._actor_key(self.meshes[0])] = 0
 
-            # Process segmentation labels
-            for label in [1, 2, 3, 4]:
+            # Process segmentation labels (use the lesion_labels determined earlier)
+            for label in lesion_labels:
                 mask = (self.seg_volume == label)
                 if np.sum(mask) < 100:  # Skip very small regions
                     continue
 
                 verts, faces, _, _ = measure.marching_cubes(mask.astype(float), 0.5)
-                
+
                 if len(verts) > 0:
                     faces = np.hstack([[3, *f] for f in faces])
                     mesh = pv.PolyData(verts, faces)
@@ -809,8 +853,8 @@ class SegmentationPane(QWidget):
                     
                     self.meshes[label] = self.pv_widget.add_mesh(
                         mesh, 
-                        color=colors[label], 
-                        opacity=self.layer_opacities[label],
+                        color=colors.get(label, [1.0, 0.1, 0.1]), 
+                        opacity=self.layer_opacities.get(label, 0.85),
                         edge_color=None,
                         show_edges=False,
                         smooth_shading=True,

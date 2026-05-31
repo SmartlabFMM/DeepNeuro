@@ -2,10 +2,10 @@
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                                QFrame, QLineEdit, QCheckBox, QMessageBox, QTabWidget,
                                QWidget, QFormLayout, QSpinBox, QComboBox)
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from api_client import api_client
-from shared_loaders import DotSpinner
+from session_cache import get_cached_profile, get_cached_settings
 
 
 PROFILE_SETTINGS_STYLESHEET = """
@@ -94,6 +94,7 @@ class ProfileWindow(QDialog):
         self.user_name = user_name
         self.user_type = user_type
         self.parent = parent
+        self.cached_profile_data = get_cached_profile(user_email)
         
         self.setWindowTitle("User Profile")
         self.setMinimumWidth(550)
@@ -203,19 +204,23 @@ class ProfileWindow(QDialog):
     
     def load_user_details(self):
         """Load user details from API"""
-        response, _ = api_client.get_user_profile(self.user_email)
-        
-        if response.get('success'):
-            user_data = response.get('user', {})
-            self.medical_id_input.setText(user_data.get('medical_id', 'N/A'))
-            self.reg_date_input.setText(user_data.get('created_at', 'N/A'))
-            self.last_login_input.setText(user_data.get('last_login', 'Never'))
-        else:
-            self.parent.show_message_box(
-                "Error",
-                response.get('message', 'Failed to load profile details'),
-                "warning"
-            )
+        user_data = self.cached_profile_data
+        if user_data is None:
+            response, _ = api_client.get_user_profile(self.user_email)
+
+            if response.get('success'):
+                user_data = response.get('user', {})
+            else:
+                self.parent.show_message_box(
+                    "Error",
+                    response.get('message', 'Failed to load profile details'),
+                    "warning"
+                )
+                return
+
+        self.medical_id_input.setText(user_data.get('medical_id', 'N/A'))
+        self.reg_date_input.setText(user_data.get('created_at', 'N/A'))
+        self.last_login_input.setText(user_data.get('last_login', 'Never'))
     
     def handle_edit_profile(self):
         """Handle edit profile button"""
@@ -243,6 +248,7 @@ class SettingsWindow(QDialog):
         self.user_name = user_name
         self.user_type = user_type
         self.parent = parent
+        self.cached_settings_data = get_cached_settings(user_email)
         
         self.setWindowTitle("Settings")
         self.setMinimumWidth(550)
@@ -458,27 +464,31 @@ class SettingsWindow(QDialog):
     
     def load_settings(self):
         """Load user settings from API"""
-        response, _ = api_client.get_user_settings(self.user_email)
-        
-        if response.get('success'):
-            settings = response.get('settings', {})
-            
-            # Notification settings
-            self.case_request_notify.setChecked(settings.get('case_request_notify', True))
-            self.case_completed_notify.setChecked(settings.get('case_completed_notify', True))
-            self.patient_update_notify.setChecked(settings.get('patient_update_notify', True))
-            self.system_notify.setChecked(settings.get('system_notify', True))
-            self.frequency_combo.setCurrentText(settings.get('notification_frequency', 'Immediately'))
-            
-            # Display settings
-            self.theme_combo.setCurrentText(settings.get('theme', 'Light'))
-            self.font_size_spin.setValue(int(settings.get('font_size', 10)))
-            self.autosave_check.setChecked(settings.get('autosave', True))
-            
-            # Privacy settings
-            self.timeout_spin.setValue(int(settings.get('session_timeout', 120)))
-            self.analytics_check.setChecked(settings.get('allow_analytics', True))
-            self.data_sharing_check.setChecked(settings.get('allow_data_sharing', False))
+        settings = self.cached_settings_data
+        if settings is None:
+            response, _ = api_client.get_user_settings(self.user_email)
+
+            if response.get('success'):
+                settings = response.get('settings', {})
+            else:
+                return
+
+        # Notification settings
+        self.case_request_notify.setChecked(settings.get('case_request_notify', True))
+        self.case_completed_notify.setChecked(settings.get('case_completed_notify', True))
+        self.patient_update_notify.setChecked(settings.get('patient_update_notify', True))
+        self.system_notify.setChecked(settings.get('system_notify', True))
+        self.frequency_combo.setCurrentText(settings.get('notification_frequency', 'Immediately'))
+
+        # Display settings
+        self.theme_combo.setCurrentText(settings.get('theme', 'Light'))
+        self.font_size_spin.setValue(int(settings.get('font_size', 10)))
+        self.autosave_check.setChecked(settings.get('autosave', True))
+
+        # Privacy settings
+        self.timeout_spin.setValue(int(settings.get('session_timeout', 120)))
+        self.analytics_check.setChecked(settings.get('allow_analytics', True))
+        self.data_sharing_check.setChecked(settings.get('allow_data_sharing', False))
     
     def handle_save_settings(self):
         """Save settings to API"""

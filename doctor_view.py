@@ -1207,6 +1207,8 @@ class DoctorView:
             self.sequence_view_cache.pop(oldest_key, None)
 
     def _build_case_info_payload(self, request):
+        # Include both legacy `created_at` and a clearer `request_date` key.
+        # Also include `completed_at` when available so UIs can show completion time.
         return {
             "patient_name": request.get("patient_name", ""),
             "patient_id": request.get("patient_id", ""),
@@ -1215,6 +1217,8 @@ class DoctorView:
             "status": request.get("status", ""),
             "scan_date": request.get("scan_date", ""),
             "created_at": request.get("created_at", ""),
+            "request_date": request.get("created_at", ""),
+            "completed_at": request.get("completed_at", ""),
         }
 
     def _format_scan_date_with_time(self, request):

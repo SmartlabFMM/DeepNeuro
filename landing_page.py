@@ -7,6 +7,7 @@ from PySide6.QtGui import QFont
 from api_client import api_client
 from doctor_view import DoctorView
 from radiologist_view import RadiologistView
+from session_cache import clear_user_session
 from datetime import datetime
 
 class LandingPage(QMainWindow):
@@ -598,6 +599,7 @@ class LandingPage(QMainWindow):
         )
         
         if reply == QMessageBox.Yes:
+            clear_user_session(self.user_email)
             # Import here to avoid circular dependency
             from auth_window import AuthWindow
             self.auth_window = AuthWindow()
@@ -732,7 +734,7 @@ class LandingPage(QMainWindow):
         title = QLabel("Select visualization options")
         title.setFont(QFont("Segoe UI", 12, QFont.Bold))
 
-        subtitle = QLabel("Choose disease type and view mode")
+        subtitle = QLabel("Choose view mode")
         subtitle.setObjectName("DialogSubtitle")
         subtitle.setFont(QFont("Segoe UI", 9))
 
@@ -742,30 +744,21 @@ class LandingPage(QMainWindow):
         card_layout.setContentsMargins(14, 12, 14, 12)
         card_layout.setSpacing(10)
 
-        form = QFormLayout()
-        form.setSpacing(10)
-        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        # Simplified: present two buttons for 2D or 3D visualization
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(12)
 
-        disease_combo = QComboBox()
-        disease_combo.setObjectName("DiseaseCombo")
-        disease_combo.addItems([
-            "Glioma Tumor",
-            "Hemorrhagic Stroke",
-            "Ischemic Stroke"
-        ])
+        btn_2d = QPushButton("2D Viewer")
+        btn_2d.setCursor(Qt.PointingHandCursor)
+        btn_2d.setStyleSheet("background: #e5e7eb; color: #111827; font-weight: 700; padding: 12px 20px;")
 
-        mode_combo = QComboBox()
-        mode_combo.setObjectName("ModeCombo")
-        mode_combo.addItems(["2D", "3D"])
+        btn_3d = QPushButton("3D Viewer")
+        btn_3d.setCursor(Qt.PointingHandCursor)
+        btn_3d.setStyleSheet("background: #6366f1; color: white; font-weight: 700; padding: 12px 20px;")
 
-        disease_label = QLabel("Disease Type")
-        disease_label.setObjectName("FieldLabel")
-        mode_label = QLabel("Visualization")
-        mode_label.setObjectName("FieldLabel")
-
-        form.addRow(disease_label, disease_combo)
-        form.addRow(mode_label, mode_combo)
-        card_layout.addLayout(form)
+        btn_layout.addWidget(btn_2d)
+        btn_layout.addWidget(btn_3d)
+        card_layout.addLayout(btn_layout)
 
         buttons = QHBoxLayout()
         buttons.addStretch()
@@ -784,30 +777,19 @@ class LandingPage(QMainWindow):
         """)
         cancel_btn.clicked.connect(dialog.reject)
 
-        open_btn = QPushButton("Open")
-        open_btn.setCursor(Qt.PointingHandCursor)
-        open_btn.setStyleSheet("""
-            QPushButton {
-                background: #6366f1;
-                color: white;
-                border: none;
-                font-weight: 600;
-            }
-            QPushButton:hover {
-                background: #818cf8;
-            }
-        """)
-
-        def handle_open():
-            selected_disease = disease_combo.currentText()
-            selected_mode = mode_combo.currentText()
+    
+        def handle_2d():
             dialog.accept()
-            self.launch_visualization(selected_disease, selected_mode)
+            self.launch_visualization(None, "2D")
 
-        open_btn.clicked.connect(handle_open)
+        def handle_3d():
+            dialog.accept()
+            self.launch_visualization(None, "3D")
+
+        btn_2d.clicked.connect(handle_2d)
+        btn_3d.clicked.connect(handle_3d)
 
         buttons.addWidget(cancel_btn)
-        buttons.addWidget(open_btn)
 
         layout.addWidget(title)
         layout.addWidget(subtitle)
@@ -817,9 +799,23 @@ class LandingPage(QMainWindow):
         dialog.exec()
 
     def launch_visualization(self, disease_type, mode):
-        """Route visualization request to supported/placeholder flows."""
-        if disease_type == "Glioma Tumor" and mode == "3D":
-            self.show_segmentation_viewer()
+        """Route visualization request to supported/placeholder flows.
+
+        If `disease_type` is None, the viewer will attempt sensible defaults
+        (3D viewer opens when available; 2D viewer opens for sequence view).
+        """
+        if mode == "3D":
+            # Default to segmentation viewer when disease is not specified or it's glioma
+            if disease_type is None or disease_type == "Glioma Tumor":
+                self.show_segmentation_viewer()
+                return
+
+            # Other disease types may not have 3D support yet
+            self.show_message_box(
+                "Coming Soon",
+                f"3D visualization for {disease_type} is not available yet.",
+                "information"
+            )
             return
 
         if mode == "2D":
@@ -832,13 +828,6 @@ class LandingPage(QMainWindow):
             except Exception as e:
                 self.show_message_box("Error", f"Failed to open 2D viewer: {e}", "critical")
                 return
-
-        self.show_message_box(
-            "Coming Soon",
-            f"{mode} visualization for {disease_type} is not available yet.\n\n"
-            "Currently available: Glioma Tumor (3D).",
-            "information"
-        )
 
     def show_segmentation_viewer(self):
         if self.seg_viewer is not None:

@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+
 from PySide6.QtCore import QEasingCurve, QParallelAnimationGroup, QPoint, QPropertyAnimation, QTimer, Qt
 from PySide6.QtGui import QCursor, QGuiApplication
 from PySide6.QtWidgets import QGraphicsOpacityEffect, QHBoxLayout, QMainWindow, QMessageBox, QStackedWidget, QVBoxLayout, QWidget
@@ -13,6 +15,7 @@ from auth_screens import (
     create_branding_panel,
 )
 from landing_page import LandingPage
+from session_cache import prime_user_session
 
 
 class AuthWindow(QMainWindow):
@@ -572,6 +575,7 @@ class AuthWindow(QMainWindow):
             user = response.get("user", {})
             user_type = user.get("user_type", "unknown")
             user_name = user.get("name", email)
+            self._warm_user_session_cache(email, user)
             self.landing_page = LandingPage(email, user_type, user_name)
             self.landing_page.show()
             self.close()
@@ -582,6 +586,27 @@ class AuthWindow(QMainWindow):
             response.get("message", "Invalid email or password.\nPlease try again."),
             "critical",
         )
+
+    def _warm_user_session_cache(self, email, user):
+        """Load profile and settings once after login so later windows can read from memory."""
+        prime_user_session(email, user=user)
+
+        try:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                profile_future = executor.submit(api_client.get_user_profile, email)
+                settings_future = executor.submit(api_client.get_user_settings, email)
+
+                profile_response, _ = profile_future.result()
+                settings_response, _ = settings_future.result()
+
+            if profile_response.get("success"):
+                prime_user_session(email, profile=profile_response.get("user", {}))
+
+            if settings_response.get("success"):
+                prime_user_session(email, settings=settings_response.get("settings", {}))
+        except Exception:
+            # Login should still succeed even if the preload requests fail.
+            pass
 
     def handle_signup(self):
         name = self.signup_form.name_input.text().strip()
