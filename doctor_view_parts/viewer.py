@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-from shared_request_ui import clean_value
+from shared_request_ui import clean_value, format_request_datetime
 from doctor_view_parts.widgets import DraggableSequenceList, SequenceDropPanel
 
 
@@ -47,7 +47,7 @@ class CaseSequenceViewerDialog(QDialog):
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
         self.setWindowFlag(Qt.WindowCloseButtonHint, True)
         self.setWindowTitle("Case Sequence Viewer")
-        self.setMinimumSize(1250, 780)
+        self.setMinimumSize(1400, 810)
         self.setSizeGripEnabled(True)
         self.case_info = case_info or {}
         self.scan_date_options = list(scan_date_options or [])
@@ -71,6 +71,8 @@ class CaseSequenceViewerDialog(QDialog):
         splitter = QSplitter(Qt.Horizontal)
         splitter.setHandleWidth(10)
         splitter.setChildrenCollapsible(False)
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, False)
 
         sidebar = QFrame()
         sidebar.setObjectName("ViewerSidebar")
@@ -212,7 +214,7 @@ class CaseSequenceViewerDialog(QDialog):
         case_title.setObjectName("CardTitle")
         case_layout.addWidget(case_title)
 
-        scan_date_title = QLabel("Scan Date")
+        scan_date_title = QLabel("Case Request Date")
         scan_date_title.setStyleSheet("color: #334155; font-size: 11px; font-weight: 700;")
         case_layout.addWidget(scan_date_title)
 
@@ -260,6 +262,7 @@ class CaseSequenceViewerDialog(QDialog):
             ("Diagnosis", clean_value(self.case_info.get("diagnosis_type"))),
             ("Priority", clean_value(self.case_info.get("priority"))),
             ("Status", clean_value(self.case_info.get("status"))),
+            ("Completed At", clean_value(format_request_datetime(self.case_info.get("completed_at", "")))),
         ]
 
         for label_text, value_text in case_rows:
@@ -393,6 +396,8 @@ class CaseSequenceViewerDialog(QDialog):
             "Diagnosis": self.case_info.get("diagnosis_type", ""),
             "Priority": self.case_info.get("priority", ""),
             "Status": self.case_info.get("status", ""),
+            "Request Date": format_request_datetime(self.case_info.get("request_date") or self.case_info.get("created_at", "")),
+            "Completed At": format_request_datetime(self.case_info.get("completed_at", "")),
         }
         for label_text, value_text in mapping.items():
             row = self.case_info_rows.get(label_text)
@@ -506,7 +511,7 @@ class CaseSequenceViewerDialog(QDialog):
             self._scan_change_in_progress = False
 
     def _format_scan_date_with_time(self, request):
-        """Format scan date with time from created_at timestamp."""
+        """Format request date with time from created_at timestamp."""
         scan_date = clean_value(request.get("scan_date"))
         created_at = str(request.get("created_at", "") or "").strip()
 

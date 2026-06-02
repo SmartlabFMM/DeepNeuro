@@ -407,8 +407,8 @@ class Segmentation3DCaseViewerDialog(QDialog):
         rows = [
             ("Patient", clean_value(self.case_info.get("patient_name"))),
             ("Patient ID", clean_value(self.case_info.get("patient_id"))),
-            ("Scan Date", clean_value(self.case_info.get("scan_date"))),
-            ("Request Created", format_request_datetime(self.case_info.get("created_at", ""))),
+            ("Request Date", format_request_datetime(self.case_info.get("created_at", ""))),
+            ("Completed At", format_request_datetime(self.case_info.get("completed_at"))),
             ("Diagnosis", clean_value(self.case_info.get("diagnosis_type", "Pending"))),
             ("Status", clean_value(self.case_info.get("status", "Unknown"))),
         ]

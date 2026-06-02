@@ -346,15 +346,79 @@ class DoctorView:
             on_delete_patient_click(selected_patient_id())
 
         def on_view_medical_history_click():
-            if not selected_patient_id():
+            patient_id = selected_patient_id()
+            if not patient_id:
                 self.parent.show_message_box(
                     "Select Patient",
                     "Please select a patient first.",
                     "warning"
                 )
                 return
+
+            matching_requests = [
+                request for request in self.inbox_all_requests
+                if str(request.get('patient_id', '')).strip() == patient_id
+            ]
+
+            if not matching_requests:
+                response, _ = api_client.get_doctor_requests(self.user_email)
+                if response.get('success'):
+                    self.inbox_all_requests = response.get('requests', []) or response.get('cases', []) or []
+                    matching_requests = [
+                        request for request in self.inbox_all_requests
+                        if str(request.get('patient_id', '')).strip() == patient_id
+                    ]
+
+            if not matching_requests:
+                self.parent.show_message_box(
+                    "No History Found",
+                    "No medical history was found for the selected patient.",
+                    "information"
+                )
+                return
+
+            matching_requests.sort(
+                key=lambda request: str(request.get('created_at', '')),
+                reverse=True,
+            )
+            history_request = matching_requests[0]
+            uploaded_tests = self._extract_uploaded_tests(history_request)
+            scan_date_options = self._build_viewer_scan_date_options(history_request)
+            viewer_payload = self._build_viewer_payload(history_request, uploaded_tests)
+            patient_segmentations = self._fetch_patient_segmentations(patient_id)
+
+            if not viewer_payload and not patient_segmentations:
+                self.parent.show_message_box(
+                    "No History Found",
+                    "This patient does not have visualizable medical history files yet.",
+                    "information"
+                )
+                return
+
             dialog.accept()
-            self.parent.open_visualization_selector()
+            self.parent.open_visualization_selector({
+                "patient_id": patient_id,
+                "patient_name": history_request.get('patient_name', ''),
+                "viewer_payload": viewer_payload,
+                "scan_date_options": scan_date_options,
+                "current_scan_option_id": str(history_request.get('id') or ''),
+                "on_scan_date_selected": (
+                    lambda option_id, options=list(scan_date_options): next(
+                        (
+                            self._build_viewer_payload(
+                                option.get('request') or {},
+                                option.get('uploaded_tests') or [],
+                            )
+                            for option in options
+                            if str(option.get('id') or '') == str(option_id)
+                        ),
+                        {}
+                    )
+                ),
+                "case_info": self._build_case_info_payload(history_request),
+                "segmentation_file_id": str(history_request.get('segmentation_file') or ''),
+                "all_patient_segmentations": patient_segmentations,
+            })
 
         def is_dialog_alive():
             return dialog_is_alive['value']
@@ -1565,7 +1629,7 @@ class DoctorView:
         badge_row.setSpacing(8)
         badge_row.addWidget(make_badge(f"Status: {request.get('status', 'N/A')}", "#ecfeff", "#155e75", "#a5f3fc"))
         badge_row.addWidget(make_badge(f"Priority: {request.get('priority', 'N/A')}", "#fff7ed", "#9a3412", "#fed7aa"))
-        badge_row.addWidget(make_badge(f"Scan Date: {request.get('scan_date', 'N/A')}", "#eef2ff", "#3730a3", "#c7d2fe"))
+        # Scan Date badge removed — show request/completed dates in case info
         badge_row.addStretch()
         header_layout.addLayout(badge_row)
 
@@ -1596,13 +1660,16 @@ class DoctorView:
 
         priority_label = make_badge(request.get('priority', 'N/A'), "#fff7ed", "#9a3412", "#fed7aa")
         status_label = make_badge(request.get('status', 'N/A'), "#ecfeff", "#155e75", "#a5f3fc")
-        scan_date_label = QLabel(clean_value(request.get('scan_date')))
-        scan_date_label.setStyleSheet("color: #111827; padding-top: 4px;")
+        request_date_label = QLabel(clean_value(format_request_datetime(request.get('created_at', 'N/A'))))
+        request_date_label.setStyleSheet("color: #111827; padding-top: 4px;")
+        completed_label = QLabel(clean_value(format_request_datetime(request.get('completed_at', ''))))
+        completed_label.setStyleSheet("color: #111827; padding-top: 4px;")
 
         case_rows = [
             ("Priority", priority_label),
             ("Status", status_label),
-            ("Scan Date", scan_date_label),
+            ("Request Date", request_date_label),
+            ("Completed At", completed_label),
         ]
 
         content_layout.addWidget(make_section_card("Patient Information", patient_rows))

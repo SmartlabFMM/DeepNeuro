@@ -87,10 +87,11 @@ class RadiologistView:
         """Format file name for viewer display (matching doctor view)."""
         patient_name = clean_value(request.get("patient_name"))
         patient_id = self._short_patient_id(request.get("patient_id"))
-        scan_date = clean_value(request.get("scan_date"))
+        # Use request creation time as the date shown in file names
+        request_date = format_request_datetime(request.get("created_at", ""))
         modality = self._infer_file_modality(raw_name)
 
-        parts = [patient_name, patient_id, scan_date, modality]
+        parts = [patient_name, patient_id, request_date, modality]
         formatted = "-".join(part for part in parts if part and part != "N/A")
         if formatted:
             return formatted
@@ -965,7 +966,7 @@ class RadiologistView:
         badge_row.setSpacing(8)
         badge_row.addWidget(make_badge(f"Status: {request.get('status', 'N/A')}", "#ecfeff", "#155e75", "#a5f3fc"))
         badge_row.addWidget(make_badge(f"Priority: {request.get('priority', 'N/A')}", "#fff7ed", "#9a3412", "#fed7aa"))
-        badge_row.addWidget(make_badge(f"Scan Date: {request.get('scan_date', 'N/A')}", "#eef2ff", "#3730a3", "#c7d2fe"))
+        # Scan Date badge removed per UI update; keep request and completed dates only
         badge_row.addStretch()
         header_layout.addLayout(badge_row)
 
@@ -1001,10 +1002,11 @@ class RadiologistView:
 
         priority_label = make_badge(request.get('priority', 'N/A'), "#fff7ed", "#9a3412", "#fed7aa")
         status_label = make_badge(request.get('status', 'N/A'), "#ecfeff", "#155e75", "#a5f3fc")
-        scan_date_label = QLabel(clean_value(request.get('scan_date')))
-        scan_date_label.setStyleSheet("color: #111827; padding-top: 4px;")
-        received_label = QLabel(clean_value(format_request_datetime(request.get('created_at', 'N/A'))))
-        received_label.setStyleSheet("color: #111827; padding-top: 4px;")
+        # scan_date removed — display request and completed dates instead
+        request_date_label = QLabel(clean_value(format_request_datetime(request.get('created_at', 'N/A'))))
+        request_date_label.setStyleSheet("color: #111827; padding-top: 4px;")
+        completed_label = QLabel(clean_value(format_request_datetime(request.get('completed_at', ''))))
+        completed_label.setStyleSheet("color: #111827; padding-top: 4px;")
         from_doctor_label = QLabel(clean_value(request.get('doctor_name')))
         from_doctor_label.setStyleSheet("color: #111827; padding-top: 4px;")
 
@@ -1012,8 +1014,8 @@ class RadiologistView:
             ("From Doctor", from_doctor_label),
             ("Priority", priority_label),
             ("Status", status_label),
-            ("Scan Date", scan_date_label),
-            ("Received", received_label),
+            ("Request Date", request_date_label),
+            ("Completed At", completed_label),
         ]
 
         content_layout.addWidget(make_section_card("Patient Information", patient_rows))

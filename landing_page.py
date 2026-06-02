@@ -653,8 +653,9 @@ class LandingPage(QMainWindow):
             msg_box.setStandardButtons(QMessageBox.Ok)
             msg_box.exec()
 
-    def open_visualization_selector(self):
+    def open_visualization_selector(self, viewer_context=None):
         """Collect disease type and visualization mode before opening viewer."""
+        viewer_context = viewer_context or {}
         dialog = QDialog(self)
         dialog.setWindowTitle("Visualize Medical Records")
         dialog.setMinimumWidth(480)
@@ -734,7 +735,13 @@ class LandingPage(QMainWindow):
         title = QLabel("Select visualization options")
         title.setFont(QFont("Segoe UI", 12, QFont.Bold))
 
-        subtitle = QLabel("Choose view mode")
+        patient_name = str(viewer_context.get("patient_name") or "").strip()
+        patient_id = str(viewer_context.get("patient_id") or "").strip()
+        subtitle_text = "Choose view mode"
+        if patient_name or patient_id:
+            subtitle_text = f"Linked to {patient_name or 'selected patient'}{f' ({patient_id})' if patient_id else ''}"
+
+        subtitle = QLabel(subtitle_text)
         subtitle.setObjectName("DialogSubtitle")
         subtitle.setFont(QFont("Segoe UI", 9))
 
@@ -780,11 +787,11 @@ class LandingPage(QMainWindow):
     
         def handle_2d():
             dialog.accept()
-            self.launch_visualization(None, "2D")
+            self.launch_visualization(None, "2D", viewer_context)
 
         def handle_3d():
             dialog.accept()
-            self.launch_visualization(None, "3D")
+            self.launch_visualization(None, "3D", viewer_context)
 
         btn_2d.clicked.connect(handle_2d)
         btn_3d.clicked.connect(handle_3d)
@@ -798,13 +805,31 @@ class LandingPage(QMainWindow):
 
         dialog.exec()
 
-    def launch_visualization(self, disease_type, mode):
+    def launch_visualization(self, disease_type, mode, viewer_context=None):
         """Route visualization request to supported/placeholder flows.
 
         If `disease_type` is None, the viewer will attempt sensible defaults
         (3D viewer opens when available; 2D viewer opens for sequence view).
         """
+        viewer_context = viewer_context or {}
         if mode == "3D":
+            if viewer_context.get("segmentation_file_id") or viewer_context.get("all_patient_segmentations"):
+                try:
+                    from segmentation_case_viewer import Segmentation3DCaseViewerDialog
+
+                    viewer_dialog = Segmentation3DCaseViewerDialog(
+                        self,
+                        case_info=viewer_context.get("case_info", {}),
+                        segmentation_file_id=viewer_context.get("segmentation_file_id"),
+                        all_patient_segmentations=viewer_context.get("all_patient_segmentations", []),
+                        on_segmentation_selected=viewer_context.get("on_segmentation_selected"),
+                    )
+                    viewer_dialog.exec()
+                    return
+                except Exception as exc:
+                    self.show_message_box("Error", f"Failed to open 3D viewer: {exc}", "critical")
+                    return
+
             # Default to segmentation viewer when disease is not specified or it's glioma
             if disease_type is None or disease_type == "Glioma Tumor":
                 self.show_segmentation_viewer()
@@ -821,8 +846,15 @@ class LandingPage(QMainWindow):
         if mode == "2D":
             try:
                 from doctor_view_parts import viewer as doctor_view_viewer
-                # Open the 2D case sequence viewer dialog (empty initially).
-                viewer_dialog = doctor_view_viewer.CaseSequenceViewerDialog(self, [], case_info={})
+                case_payload = viewer_context.get("viewer_payload") or {}
+                viewer_dialog = doctor_view_viewer.CaseSequenceViewerDialog(
+                    self,
+                    case_payload.get("sequence_entries", []),
+                    case_info=case_payload.get("case_info", {}),
+                    scan_date_options=viewer_context.get("scan_date_options"),
+                    current_scan_option_id=viewer_context.get("current_scan_option_id"),
+                    on_scan_date_selected=viewer_context.get("on_scan_date_selected"),
+                )
                 viewer_dialog.exec()
                 return
             except Exception as e:
