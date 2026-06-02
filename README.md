@@ -4,7 +4,7 @@ A modern desktop application built with PySide6 (Qt6) for brain disease diagnosi
 
 ## Overview
 
-The Frontend provides a rich graphical user interface for medical professionals to interact with the DeepNeuro AI-powered diagnosis system. It features user authentication, multiple diagnosis workflows, and sophisticated 3D segmentation visualization for brain tumor analysis.
+The frontend provides a rich graphical user interface for medical professionals to interact with the DeepNeuro AI-powered diagnosis system. It features user authentication, multiple diagnosis workflows, and sophisticated 3D segmentation visualization for brain tumor analysis.
 
 ## Architecture
 
@@ -56,14 +56,14 @@ The Frontend provides a rich graphical user interface for medical professionals 
 ## Prerequisites
 
 - Python 3.8 or higher
-- Backend server running (see `Backend/README.md`)
+- Backend server running (see `DeepNeuroBack/README.md`)
 - NIfTI brain scan files for segmentation viewing
 
 ## Installation
 
 ### 1. Navigate to Frontend Directory
 ```powershell
-cd Frontend
+cd DeepNeuro
 ```
 
 ### 2. Install Dependencies
@@ -99,3 +99,7 @@ Create a `.env` file in the Frontend directory (optional):
 ```env
 API_BASE_URL=http://localhost:5000
 ```
+
+## Backend Connection Notes
+
+The frontend expects the backend API at `http://localhost:5000` by default. If you see Flask request logs in the backend terminal, those are normal development-server logs from `DeepNeuroBack/app.py` while the frontend is making API calls.

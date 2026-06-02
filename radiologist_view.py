@@ -1302,7 +1302,7 @@ class RadiologistView:
             # Show loading dialog
             loading_dialog = QDialog(dialog)
             loading_dialog.setWindowTitle("Generating Segmentation")
-            loading_dialog.setFixedSize(400, 180)
+            loading_dialog.setFixedSize(360, 170)
             loading_dialog.setStyleSheet("""
                 QDialog {
                     background: #f8fafc;
@@ -1311,33 +1311,24 @@ class RadiologistView:
             loading_dialog.setWindowFlags(loading_dialog.windowFlags() & ~Qt.WindowCloseButtonHint)
             loading_layout = QVBoxLayout(loading_dialog)
             loading_layout.setContentsMargins(20, 20, 20, 20)
-            loading_layout.setSpacing(16)
+            loading_layout.setSpacing(14)
+            loading_layout.setAlignment(Qt.AlignCenter)
+
+            spinner = DotSpinner(loading_dialog)
+            spinner.start()
 
             status_label = QLabel("Processing MRI modalities and generating segmentation...")
             status_label.setStyleSheet("color: #111827; font-weight: 600;")
             status_label.setFont(QFont("Segoe UI", 10))
-            loading_layout.addWidget(status_label)
+            status_label.setWordWrap(True)
+            status_label.setAlignment(Qt.AlignCenter)
 
-            from PySide6.QtWidgets import QProgressBar
-            progress_bar = QProgressBar()
-            progress_bar.setRange(0, 0)  # Indeterminate progress
-            progress_bar.setStyleSheet("""
-                QProgressBar {
-                    border: 1px solid #e5e7eb;
-                    border-radius: 6px;
-                    background: #f3f4f6;
-                    height: 8px;
-                }
-                QProgressBar::chunk {
-                    background: #2563eb;
-                    border-radius: 6px;
-                }
-            """)
-            loading_layout.addWidget(progress_bar)
-
-            loading_layout.addStretch()
             hint_label = QLabel("This may take 1-2 minutes...")
             hint_label.setStyleSheet("color: #6b7280; font-size: 9px;")
+            hint_label.setAlignment(Qt.AlignCenter)
+
+            loading_layout.addWidget(spinner, alignment=Qt.AlignCenter)
+            loading_layout.addWidget(status_label)
             loading_layout.addWidget(hint_label)
 
             # Show loading dialog and process events
@@ -1357,10 +1348,9 @@ class RadiologistView:
             if response.get('success'):
                 segmentation_file_input.setText(response.get('file_path', ''))
                 self.parent.show_message_box(
-                    "Segmentation Ready",
-                    f"Generated segmentation saved to:\n{response.get('file_path', '')}",
-                    "information"
-                )
+                    "The segmentation file has been Generated successfully",
+                    "You can now complete the case and send it to the doctor."
+                    )
                 return
 
             self.parent.show_message_box(
