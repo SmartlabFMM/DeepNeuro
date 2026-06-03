@@ -1949,6 +1949,9 @@ class DoctorView:
             'diagnosis_type': request.get('diagnosis_type', ''),
             'status': request.get('status', ''),
         }
+        # Include priority and completion timestamp so 3D viewer shows full metadata
+        case_info['priority'] = request.get('priority', '')
+        case_info['completed_at'] = request.get('completed_at', '')
         
         # Fetch all segmentations for this patient
         all_patient_segs = self._fetch_patient_segmentations(request.get('patient_id'))
@@ -1984,16 +1987,19 @@ class DoctorView:
 
             # Load into viewer (left pane by default)
             try:
-                wrapper = getattr(self, 'seg_3d_viewer', None)
-                if wrapper and getattr(wrapper, 'seg_viewer_wrapper', None):
-                    pane = wrapper.seg_viewer_wrapper.left_pane
-                else:
-                    pane = getattr(self.seg_3d_viewer, 'seg_viewer_wrapper', None) or None
+                pane = None
+                dialog = getattr(self, 'seg_3d_viewer', None)
 
-                if pane is None:
-                    # Fallback: try to reach left pane directly on dialog
-                    wrapper_obj = getattr(self.seg_3d_viewer, 'seg_viewer_wrapper', None)
-                    pane = getattr(wrapper_obj, 'left_pane', None)
+                # Current structure: dialog.viewer.left_pane
+                if dialog is not None:
+                    viewer = getattr(dialog, 'viewer', None)
+                    if viewer is not None:
+                        pane = getattr(viewer, 'left_pane', None)
+
+                # Legacy fallback: dialog.seg_viewer_wrapper.left_pane
+                if pane is None and dialog is not None:
+                    wrapper = getattr(dialog, 'seg_viewer_wrapper', None)
+                    pane = getattr(wrapper, 'left_pane', None) if wrapper is not None else None
 
                 # The SegmentationPane exposes load_volumes(seg, t1)
                 if hasattr(pane, 'load_volumes'):

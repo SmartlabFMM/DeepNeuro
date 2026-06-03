@@ -243,58 +243,20 @@ class LandingPage(QMainWindow):
         welcome.setFont(QFont("Segoe UI", 14, QFont.Bold))
         welcome.setStyleSheet("color: white;")
         
-        user_label = QLabel(f"👤 Dr {self.user_name}")
-        user_label.setFont(QFont("Segoe UI", 11, QFont.Bold))
-        user_label.setStyleSheet("color: rgba(255, 255, 255, 0.9);")
+        self.user_label = QLabel(f"👤 Dr {self.user_name}")
+        self.user_label.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        self.user_label.setStyleSheet("color: rgba(255, 255, 255, 0.9);")
         
         welcome_layout.addWidget(welcome)
-        welcome_layout.addWidget(user_label)
+        welcome_layout.addWidget(self.user_label)
         
         # Profile button
         profile_btn = QPushButton("👤 Profile")
         profile_btn.setFont(QFont("Segoe UI", 9, QFont.Bold))
-        profile_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(255, 255, 255, 0.15);
-                color: white;
-                border: 1px solid rgba(255, 255, 255, 0.3);
-                border-radius: 5px;
-                padding: 6px 12px;
-            }
-            QPushButton:hover {
-                background: rgba(255, 255, 255, 0.3);
-                border: 1px solid rgba(255, 255, 255, 0.5);
-            }
-            QPushButton:pressed {
-                background: rgba(255, 255, 255, 0.15);
-            }
-        """)
+        profile_btn.setStyleSheet(self.get_header_button_style())
         profile_btn.setCursor(Qt.PointingHandCursor)
         profile_btn.clicked.connect(self.handle_profile)
         profile_btn.setFixedHeight(35)
-
-        # Settings button
-        settings_btn = QPushButton("⚙️ Settings")
-        settings_btn.setFont(QFont("Segoe UI", 9, QFont.Bold))
-        settings_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(255, 255, 255, 0.15);
-                color: white;
-                border: 1px solid rgba(255, 255, 255, 0.3);
-                border-radius: 5px;
-                padding: 6px 12px;
-            }
-            QPushButton:hover {
-                background: rgba(255, 255, 255, 0.3);
-                border: 1px solid rgba(255, 255, 255, 0.5);
-            }
-            QPushButton:pressed {
-                background: rgba(255, 255, 255, 0.15);
-            }
-        """)
-        settings_btn.setCursor(Qt.PointingHandCursor)
-        settings_btn.clicked.connect(self.handle_settings)
-        settings_btn.setFixedHeight(35)
 
         # Logout button
         logout_btn = QPushButton("🚪 Logout")
@@ -322,11 +284,37 @@ class LandingPage(QMainWindow):
         layout.addWidget(welcome_container)
         layout.addStretch()
         layout.addWidget(profile_btn)
-        layout.addWidget(settings_btn)
         layout.addWidget(logout_btn)
         
         return header
-    
+
+    def get_header_button_style(self):
+        """Match header action buttons to the logout button style."""
+        return """
+            QPushButton {
+                background: rgba(255, 255, 255, 0.15);
+                color: white;
+                border: 1px solid rgba(255, 255, 255, 0.3);
+                border-radius: 5px;
+                padding: 6px 12px;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.3);
+                border: 1px solid rgba(255, 255, 255, 0.5);
+            }
+            QPushButton:pressed {
+                background: rgba(255, 255, 255, 0.15);
+            }
+        """
+
+    def refresh_user_identity(self, user_name):
+        """Refresh the visible user identity after profile edits."""
+        self.user_name = user_name or self.user_name
+        if getattr(self, 'user_label', None) is not None:
+            self.user_label.setText(f"👤 Dr {self.user_name}")
+        if getattr(self, 'view', None) is not None:
+            self.view.user_name = self.user_name
+
     def create_info_cards(self):
         """Create info cards with key features"""
         container = QWidget()
@@ -613,10 +601,8 @@ class LandingPage(QMainWindow):
         profile_window.exec()
 
     def handle_settings(self):
-        """Handle settings button click"""
-        from profile_settings import SettingsWindow
-        settings_window = SettingsWindow(self, self.user_email, self.user_name, self.user_type)
-        settings_window.exec()
+        # Settings button removed from header; keep method for compatibility but do nothing.
+        return
 
     def handle_diagnosis_click(self, diagnosis_type):
         """Handle diagnosis button click"""

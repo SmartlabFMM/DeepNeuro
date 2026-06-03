@@ -104,6 +104,7 @@ class SegmentationPane(QWidget):
         self._case_segmentation_selector = None
         self._case_segmentation_display_btn = None
         self._case_segmentation_callback = None
+        self.active_segmentation_mode = "auto"
 
         # Main layout with splitter
         main_layout = QVBoxLayout(self)
@@ -118,165 +119,217 @@ class SegmentationPane(QWidget):
         sidebar = QFrame()
         sidebar.setObjectName("ViewerSidebar")
         sidebar.setFixedWidth(270)
+
         sidebar.setStyleSheet("""
-            QFrame#ViewerSidebar {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #081223, stop:1 #0f172a);
-                border: 1px solid #1e293b;
-                border-radius: 0px;
-            }
-            QFrame#SidebarCard {
-                background: rgba(15, 23, 42, 0.30);
-                border: 1px solid rgba(148, 163, 184, 0.25);
-                border-radius: 10px;
-            }
-            QFrame#SidebarDarkCard {
-                background: rgba(15, 23, 42, 0.78);
-                border: 1px solid rgba(148, 163, 184, 0.22);
-                border-radius: 10px;
-            }
-            QLabel#SidebarEyebrow {
-                color: #93c5fd;
-                font-size: 9px;
-                font-weight: 700;
-                letter-spacing: 0.8px;
-                background: transparent;
-                border: none;
-            }
-            QLabel#SidebarTitle {
-                color: #f8fafc;
-                font-size: 16px;
-                font-weight: 800;
-                background: transparent;
-                border: none;
-            }
-            QLabel#SidebarSubtitle {
-                color: #cbd5e1;
-                font-size: 10px;
-                line-height: 1.4;
-                background: transparent;
-                border: none;
-            }
-            QLabel#CardTitle {
-                color: #e2e8f0;
-                font-size: 12px;
-                font-weight: 800;
-                background: transparent;
-                border: none;
-            }
-            QLabel#DarkCardTitle {
-                color: #f8fafc;
-                font-size: 12px;
-                font-weight: 800;
-                background: transparent;
-                border: none;
-            }
-            QLabel#InfoRow {
-                color: #e2e8f0;
-                font-size: 10px;
-                background: transparent;
-                border: none;
-                padding: 0px;
-                min-height: 0px;
-            }
-            QComboBox, QSpinBox, QSlider {
-                background: rgba(255, 255, 255, 0.08);
-                color: #f8fafc;
-                border: 1px solid rgba(203, 213, 225, 0.28);
-                border-radius: 6px;
-                padding: 3px 5px;
-                font-size: 10px;
-            }
-            QComboBox::drop-down {
-                background: rgba(255, 255, 255, 0.08);
-                border-left: 1px solid rgba(203, 213, 225, 0.22);
-                border-top-right-radius: 6px;
-                border-bottom-right-radius: 6px;
-            }
-            QPushButton {
-                background: linear-gradient(to bottom, #6366f1, #4f46e5);
-                color: white;
-                border: none;
-                border-radius: 7px;
-                padding: 7px 10px;
-                font-weight: 600;
-                font-size: 10px;
-            }
-            QPushButton:hover {
-                background: linear-gradient(to bottom, #818cf8, #6366f1);
-            }
-            QPushButton:pressed {
-                background: linear-gradient(to bottom, #4f46e5, #4338ca);
-            }
-            QPushButton#ImportButton {
-                background: rgba(255, 255, 255, 0.04);
-                color: #dbeafe;
-                border: 1px dashed rgba(147, 197, 253, 0.45);
-                border-radius: 8px;
-                padding: 7px 10px;
-                font-weight: 600;
-            }
-            QPushButton#ImportButton:hover {
-                background: rgba(255, 255, 255, 0.08);
-                border-color: rgba(191, 219, 254, 0.8);
-            }
-            QPushButton#ImportButton:pressed {
-                background: rgba(255, 255, 255, 0.12);
-            }
-            QPushButton#HomeButton {
-                background: #f8fafc;
-                color: black;
-                border: 2px solid #0f172a;
-                border-radius: 16px;
-                min-width: 34px;
-                min-height: 34px;
-                max-width: 34px;
-                max-height: 34px;
-                font-size: 18px;
-                font-weight: 950;
-                padding: 0px;
-            }
-            QPushButton#HomeButton:hover {
-                background: #e2e8f0;
-                border-color: #1e293b;
-            }
-            QPushButton#HomeButton:pressed {
-                background: #cbd5e1;
-            }
-            QPushButton#PlusButton {
-                background: #f8fafc;
-                color: black;
-                border: 2px solid #0f172a;
-                border-radius: 16px;
-                min-width: 34px;
-                min-height: 34px;
-                max-width: 34px;
-                max-height: 34px;
-                font-size: 20px;
-                font-weight: 900;
-                padding: 0px;
-            }
-            QPushButton#PlusButton:hover {
-                background: #e2e8f0;
-                border-color: #1e293b;
-            }
-            QPushButton#PlusButton:pressed {
-                background: #cbd5e1;
-            }
-            QFrame#StatsCard QLabel#StatValue {
-                color: #f8fafc;
-                font-size: 11px;
-                font-weight: 700;
-                background: transparent;
-                border: none;
-            }
-            QFrame#StatsCard QLabel#StatHint {
-                color: #cbd5e1;
-                font-size: 9px;
-                background: transparent;
-                border: none;
-            }
-        """)
+QFrame#ViewerSidebar {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #081223, stop:1 #0f172a);
+    border: 1px solid #1e293b;
+    border-radius: 0px;
+}
+
+QFrame#SidebarCard {
+    background: rgba(15, 23, 42, 0.30);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 10px;
+}
+
+QFrame#SidebarDarkCard {
+    background: rgba(15, 23, 42, 0.78);
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    border-radius: 10px;
+}
+
+QLabel#SidebarEyebrow {
+    color: #93c5fd;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    background: transparent;
+    border: none;
+}
+
+QLabel#SidebarTitle {
+    color: #f8fafc;
+    font-size: 16px;
+    font-weight: 800;
+    background: transparent;
+    border: none;
+}
+
+QLabel#SidebarSubtitle {
+    color: #cbd5e1;
+    font-size: 10px;
+    line-height: 1.4;
+    background: transparent;
+    border: none;
+}
+
+QLabel#CardTitle {
+    color: #e2e8f0;
+    font-size: 12px;
+    font-weight: 800;
+    background: transparent;
+    border: none;
+}
+
+QLabel#DarkCardTitle {
+    color: #f8fafc;
+    font-size: 12px;
+    font-weight: 800;
+    background: transparent;
+    border: none;
+}
+
+QLabel#InfoRow {
+    color: #e2e8f0;
+    font-size: 10px;
+    background: transparent;
+    border: none;
+    padding: 0px;
+    min-height: 0px;
+}
+
+/* ================= COMBOBOX ================= */
+
+QComboBox {
+    background: rgba(255, 255, 255, 0.08);
+    color: #f8fafc;
+    border: 1px solid rgba(203, 213, 225, 0.28);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 11px;
+}
+
+QComboBox::drop-down {
+    background: transparent;
+    border: none;
+    width: 20px;
+}
+
+QComboBox::down-arrow {
+    image: none;
+}
+
+/* Dropdown popup (THIS FIXES YOUR SCREENSHOT ISSUE) */
+QComboBox QAbstractItemView {
+    background: #ffffff;
+    color: #0f172a;
+    selection-background-color: #e2e8f0;
+    selection-color: #0f172a;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    padding: 4px;
+    outline: 0;
+}
+
+/* ================= BUTTONS ================= */
+
+QPushButton {
+    background: linear-gradient(to bottom, #6366f1, #4f46e5);
+    color: white;
+    border: none;
+    border-radius: 7px;
+    padding: 7px 10px;
+    font-weight: 600;
+    font-size: 10px;
+}
+
+QPushButton:hover {
+    background: linear-gradient(to bottom, #818cf8, #6366f1);
+}
+
+QPushButton:pressed {
+    background: linear-gradient(to bottom, #4f46e5, #4338ca);
+}
+
+/* ================= IMPORT BUTTON ================= */
+
+QPushButton#ImportButton {
+    background: rgba(255, 255, 255, 0.04);
+    color: #dbeafe;
+    border: 1px dashed rgba(147, 197, 253, 0.45);
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-weight: 600;
+}
+
+QPushButton#ImportButton:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(191, 219, 254, 0.8);
+}
+
+QPushButton#ImportButton:pressed {
+    background: rgba(255, 255, 255, 0.12);
+}
+
+/* ================= HOME BUTTONS ================= */
+
+QPushButton#HomeButton,
+QPushButton#PlusButton,
+QPushButton#ReloadButton {
+    background: #f8fafc;
+    color: black;
+    border: 2px solid #0f172a;
+    border-radius: 16px;
+    min-width: 34px;
+    min-height: 34px;
+    max-width: 34px;
+    max-height: 34px;
+    font-weight: 1200;
+    padding: 0px;
+    font-size: 20px;
+}
+
+QPushButton#HomeButton:hover,
+QPushButton#PlusButton:hover,
+QPushButton#ReloadButton:hover {
+    background: #e2e8f0;
+    border-color: #1e293b;
+}
+
+QPushButton#HomeButton:pressed,
+QPushButton#PlusButton:pressed,
+QPushButton#ReloadButton:pressed {
+    background: #cbd5e1;
+}
+
+/* ================= SCROLLBAR ================= */
+
+QScrollBar:vertical {
+    background: white;
+    width: 10px;
+}
+
+QScrollBar::handle:vertical {
+    background: black;
+    border-radius: 4px;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    background: none;
+    height: 0px;
+}
+
+/* ================= STATS ================= */
+
+QFrame#StatsCard QLabel#StatValue {
+    color: #f8fafc;
+    font-size: 11px;
+    font-weight: 700;
+    background: transparent;
+    border: none;
+}
+
+QFrame#StatsCard QLabel#StatHint {
+    color: #cbd5e1;
+    font-size: 9px;
+    background: transparent;
+    border: none;
+}
+""")
+        
 
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(10, 10, 10, 10)
@@ -295,17 +348,27 @@ class SegmentationPane(QWidget):
         sidebar_title_row.addWidget(sidebar_title)
         sidebar_title_row.addStretch()
 
+        sidebar_btn_row = QHBoxLayout()
+        sidebar_btn_row.setContentsMargins(0, 0, 0, 0)
+        sidebar_btn_row.setSpacing(6)
+
         split_btn = QPushButton("+")
         split_btn.setObjectName("PlusButton")
         split_btn.setToolTip("Create split view")
         split_btn.clicked.connect(self.request_split_view)
-        sidebar_title_row.addWidget(split_btn)
+        sidebar_btn_row.addWidget(split_btn)
+
+        reload_btn = QPushButton("↻")
+        reload_btn.setObjectName("ReloadButton")
+        reload_btn.setToolTip("Reload the current render")
+        reload_btn.clicked.connect(self.reload_render)
+        sidebar_btn_row.addWidget(reload_btn)
 
         home_btn = QPushButton("⌂")
         home_btn.setObjectName("HomeButton")
         home_btn.setToolTip("Return to landing page")
         home_btn.clicked.connect(self.go_back_to_landing_page)
-        sidebar_title_row.addWidget(home_btn)
+        sidebar_btn_row.addWidget(home_btn)
 
         # Close button (visible only when this pane is in split view)
         close_btn = QPushButton("✕")
@@ -321,8 +384,8 @@ class SegmentationPane(QWidget):
                 min-height: 34px;
                 max-width: 34px;
                 max-height: 34px;
-                font-size: 16px;
-                font-weight: 900;
+                font-size: 20px;
+                font-weight: 1200;
                 padding: 0px;
             }
             QPushButton#CloseButton:hover {
@@ -336,10 +399,11 @@ class SegmentationPane(QWidget):
         close_btn.clicked.connect(self.close_pane)
         close_btn.setVisible(False)  # Hidden by default, shown only in split view
         self.close_btn = close_btn
-        sidebar_title_row.addWidget(close_btn)
+        sidebar_btn_row.addWidget(close_btn)
 
         sidebar_layout.addLayout(sidebar_title_row)
         sidebar_layout.addWidget(sidebar_subtitle)
+        sidebar_layout.addLayout(sidebar_btn_row)
 
         # File info card
         info_card = QFrame()
@@ -386,6 +450,7 @@ class SegmentationPane(QWidget):
         layers_layout = QVBoxLayout(layers_card)
         layers_layout.setContentsMargins(8, 6, 8, 6)
         layers_layout.setSpacing(4)
+        self.layers_card = layers_card
 
         layers_title = QLabel("Segmentation Layers")
         layers_title.setObjectName("DarkCardTitle")
@@ -448,6 +513,7 @@ class SegmentationPane(QWidget):
             layer_layout.addLayout(opacity_layout)
 
             self.layer_controls[label_id] = {
+                "container": layer_widget,
                 "checkbox": cb,
                 "slider": opacity_slider,
                 "value_label": opacity_value
@@ -455,6 +521,7 @@ class SegmentationPane(QWidget):
             layers_layout.addWidget(layer_widget)
 
         sidebar_layout.addWidget(layers_card, 1)
+        self.layers_card.setVisible(False)
         sidebar_layout.addStretch()
 
         # ============ MAIN VIEWER ============
@@ -465,7 +532,19 @@ class SegmentationPane(QWidget):
 
         stats_row = QHBoxLayout()
         stats_row.setContentsMargins(10, 6, 10, 0)
-        stats_row.setSpacing(0)
+        stats_row.setSpacing(12)
+
+        stats_row.addSpacing(50)
+
+        # Placeholder where external widgets (like Case Info) can be inserted
+        self.case_info_container = QWidget()
+        self.case_info_layout = QHBoxLayout(self.case_info_container)
+        self.case_info_layout.setContentsMargins(0, 0, 0, 0)
+        self.case_info_layout.setSpacing(0)
+        self.case_info_container.setVisible(False)
+
+        stats_row.addWidget(self.case_info_container)
+
         stats_row.addStretch()
 
         stats_card = QFrame()
@@ -497,12 +576,15 @@ class SegmentationPane(QWidget):
             ("Tumor voxels", "0"),
             ("Tumor volume", "0.0 mm³"),
         ]
+
+        self.sidebar_stat_name_labels = {}
         for label_text, value_text in stats_rows:
             row = QHBoxLayout()
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(6)
             label = QLabel(label_text)
             label.setStyleSheet("color: #93c5fd; font-size: 9px; font-weight: 700; background: transparent; border: none;")
+            self.sidebar_stat_name_labels[label_text] = label
             value = QLabel(value_text)
             value.setObjectName("StatValue")
             value.setWordWrap(True)
@@ -530,8 +612,9 @@ class SegmentationPane(QWidget):
                     import pyvista as _pv
                     from pyvistaqt import QtInteractor as _QtInteractor
                     self.finished.emit(_pv, _QtInteractor)
-                except Exception as e:
-                    self.error.emit(str(e))
+                except Exception:
+                    # Emit full traceback so users can inspect AppLocker / DLL issues
+                    self.error.emit(traceback.format_exc())
 
         self._renderer_thread = RendererImportThread()
         self._renderer_thread.finished.connect(self._on_renderer_ready)
@@ -593,12 +676,83 @@ class SegmentationPane(QWidget):
 
     def _on_renderer_error(self, msg):
         self.pv_widget = None
-        err = QLabel(f"3D Viewer failed: {msg}")
-        err.setStyleSheet("color: #dc2626; font-weight: 600; padding: 20px;")
+
+        # Remove placeholder
         if getattr(self, "_renderer_placeholder", None) is not None:
             self._renderer_placeholder.setParent(None)
             self._renderer_placeholder = None
-        self.viewer_container.layout().addWidget(err)
+
+        # Compact error card with actions
+        container = QFrame()
+        container.setStyleSheet("padding: 12px;")
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        title = QLabel("3D Viewer failed to initialize")
+        title.setStyleSheet("color: #dc2626; font-weight: 700; font-size: 13px;")
+        layout.addWidget(title)
+
+        hint = QLabel("An underlying native library failed to load. This is often caused by Windows Application Control (AppLocker) or missing dependencies.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #f8fafc; background: transparent;")
+        layout.addWidget(hint)
+
+        # Action row
+        actions = QHBoxLayout()
+        details_btn = QPushButton("View Details")
+        details_btn.setObjectName("ImportButton")
+        copy_btn = QPushButton("Copy Error")
+        copy_btn.setObjectName("ImportButton")
+        fix_btn = QPushButton("Show Troubleshooting")
+        fix_btn.setObjectName("ImportButton")
+
+        actions.addWidget(details_btn)
+        actions.addWidget(copy_btn)
+        actions.addWidget(fix_btn)
+        actions.addStretch()
+        layout.addLayout(actions)
+
+        # Store message for callbacks
+        detailed_msg = msg
+
+        def on_details():
+            dlg = QMessageBox(self)
+            dlg.setWindowTitle("3D Viewer error details")
+            dlg.setText("Full error traceback (copyable):")
+            dlg.setDetailedText(detailed_msg)
+            dlg.setIcon(QMessageBox.Critical)
+            dlg.exec()
+
+        def on_copy():
+            try:
+                QApplication.clipboard().setText(detailed_msg)
+                QMessageBox.information(self, "Copied", "Error details copied to clipboard.")
+            except Exception:
+                QMessageBox.warning(self, "Copy failed", "Could not copy to clipboard.")
+
+        def on_fix():
+            tips = (
+                "Troubleshooting steps:\n"
+                "1) Ensure your Python and VTK are the same architecture (both x64).\n"
+                "2) Reinstall VTK in the active venv: `pip install --upgrade --force-reinstall --no-cache-dir vtk`\n"
+                "3) Install Microsoft Visual C++ Redistributable (2015-2022 x64).\n"
+                "4) If on a managed PC, AppLocker / WDAC may block VTK DLLs — contact your admin or unblock the DLLs.\n"
+                "5) Check antivirus quarantine and restore any quarantined VTK DLLs.\n"
+                "6) To debug, run: `python -c \"import platform,sys; print(platform.architecture()); import vtk\"` and inspect the traceback.\n"
+            )
+            dlg = QMessageBox(self)
+            dlg.setWindowTitle("3D Viewer Troubleshooting")
+            dlg.setText("Suggested fixes and next steps")
+            dlg.setDetailedText(tips)
+            dlg.setIcon(QMessageBox.Information)
+            dlg.exec()
+
+        details_btn.clicked.connect(on_details)
+        copy_btn.clicked.connect(on_copy)
+        fix_btn.clicked.connect(on_fix)
+
+        self.viewer_container.layout().addWidget(container)
 
     def import_seg_file(self):
         self._import_seg_file_into(self)
@@ -714,13 +868,43 @@ class SegmentationPane(QWidget):
             return None, None
 
         folder = os.path.dirname(seg_file)
-        t1_file = next((os.path.join(folder, f) for f in os.listdir(folder) if "t1" in f.lower()), None)
 
-        if not t1_file:
-            QMessageBox.critical(self, "Error", "T1 file not found in the same directory")
+        files = [f.lower() for f in os.listdir(folder)]
+
+        # -------- ISLES ADC --------
+        adc_file = next(
+            (
+                os.path.join(folder, f)
+                for f in os.listdir(folder)
+                if "adc" in f.lower()
+            ),
+            None
+        )
+
+        # -------- BraTS T1c / T1ce --------
+        t1_file = next(
+            (
+                os.path.join(folder, f)
+                for f in os.listdir(folder)
+                if any(x in f.lower() for x in ["t1ce", "t1c", "t1"])
+            ),
+            None
+        )
+
+        # Auto-detect segmentation type
+        if adc_file is not None:
+            anatomical_file = adc_file
+        elif t1_file is not None:
+            anatomical_file = t1_file
+        else:
+            QMessageBox.critical(
+                self,
+                "Error",
+                "No ADC or T1/T1CE file found in the same directory."
+            )
             return None, None
 
-        return seg_file, t1_file
+        return seg_file, anatomical_file
 
     def _import_seg_file_into(self, target_viewer):
         seg_file, t1_file = self._pick_segmentation_pair()
@@ -755,6 +939,31 @@ class SegmentationPane(QWidget):
             except Exception:
                 pass
 
+    def _display_name_for_label(self, label_id, mode):
+        if mode == "ischemia" and label_id == 1:
+            return "Ischemic Lesion"
+        return class_labels.get(label_id, f"Label {label_id}")
+
+    def _update_layer_panel_for_mode(self, mode):
+        if not hasattr(self, "layers_card"):
+            return
+
+        if self.seg_volume is None or self.t1_volume is None:
+            self.layers_card.setVisible(False)
+            return
+
+        allowed = {0, 1} if mode == "ischemia" else {0, 1, 2, 3, 4}
+        for label_id, controls in self.layer_controls.items():
+            row_widget = controls.get("container")
+            if row_widget is not None:
+                row_widget.setVisible(label_id in allowed)
+
+            checkbox = controls.get("checkbox")
+            if checkbox is not None:
+                checkbox.setText(self._display_name_for_label(label_id, mode))
+
+        self.layers_card.setVisible(True)
+
     def init_3d(self):
         """Initialize 3D visualization with enhanced meshes."""
         if self.pv_widget is None:
@@ -775,23 +984,25 @@ class SegmentationPane(QWidget):
             # Determine which labels represent lesion regions for this segmentation.
             present_labels = sorted(list(np.unique(self.seg_volume).astype(int)))
 
+            resolved_mode = "tumor"
             if self.segmentation_mode == 'ischemia':
                 # Force interpret as ischemia (label 1 == lesion)
-                class_labels[1] = "Ischemic Lesion"
-                colors[1] = [1.0, 0.1, 0.1]
-                color_hex[1] = "#FF1A1A"
+                resolved_mode = "ischemia"
                 lesion_labels = [1]
             elif self.segmentation_mode == 'tumor':
+                resolved_mode = "tumor"
                 lesion_labels = [l for l in [1, 2, 3, 4] if l in present_labels]
             else:
                 # Auto mode: if only {0,1} present, treat as ischemia; otherwise tumor labels
                 if set(present_labels).issubset({0, 1}):
-                    class_labels[1] = "Ischemic Lesion"
-                    colors[1] = [1.0, 0.1, 0.1]
-                    color_hex[1] = "#FF1A1A"
+                    resolved_mode = "ischemia"
                     lesion_labels = [1]
                 else:
+                    resolved_mode = "tumor"
                     lesion_labels = [l for l in [1, 2, 3, 4] if l in present_labels]
+
+            self.active_segmentation_mode = resolved_mode
+            self._update_layer_panel_for_mode(resolved_mode)
 
             self.tumor_volume_voxels = int(np.count_nonzero(np.isin(self.seg_volume, lesion_labels)))
 
@@ -850,10 +1061,11 @@ class SegmentationPane(QWidget):
                     
                     # Smooth segmentation meshes for better visualization (reduced iterations)
                     mesh = mesh.smooth(n_iter=50, relaxation_factor=0.15)
+                    mesh_color = [1.0, 0.1, 0.1] if (resolved_mode == "ischemia" and label == 1) else colors.get(label, [1.0, 0.1, 0.1])
                     
                     self.meshes[label] = self.pv_widget.add_mesh(
                         mesh, 
-                        color=colors.get(label, [1.0, 0.1, 0.1]), 
+                        color=mesh_color,
                         opacity=self.layer_opacities.get(label, 0.85),
                         edge_color=None,
                         show_edges=False,
@@ -891,6 +1103,15 @@ class SegmentationPane(QWidget):
 
     def _refresh_sidebar_stats(self):
         """Update the compact sidebar statistics after a volume loads."""
+
+
+        if self.active_segmentation_mode == "ischemia":
+           self.sidebar_stat_name_labels["Tumor voxels"].setText("Lesion voxels")
+           self.sidebar_stat_name_labels["Tumor volume"].setText("Lesion volume")
+        else:
+           self.sidebar_stat_name_labels["Tumor voxels"].setText("Tumor voxels")
+           self.sidebar_stat_name_labels["Tumor volume"].setText("Tumor volume")
+
         file_label = self.sidebar_stat_labels.get("File")
         if file_label is not None:
             file_label.setText(self.current_file or "No file loaded")
@@ -915,6 +1136,95 @@ class SegmentationPane(QWidget):
 
         self.pv_widget.set_background("#ffffff")
         self.pv_widget.render()
+
+    def reload_render(self):
+        """Rebuild the renderer widget and then redraw the current scene."""
+        if self.seg_volume is None or self.t1_volume is None:
+            QMessageBox.information(self, "Reload Render", "Load a segmentation file first.")
+            return
+
+        try:
+            self.rebuild_renderer()
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", f"Failed to reload render: {exc}")
+
+    def rebuild_renderer(self):
+        """Tear down and recreate the PyVista widget used for rendering."""
+        if QtInteractor is None:
+            raise RuntimeError("3D renderer is not available yet")
+
+        layout = self.viewer_container.layout() if hasattr(self, "viewer_container") else None
+        if layout is None:
+            raise RuntimeError("Viewer container is missing")
+
+        if getattr(self, "_renderer_placeholder", None) is not None:
+            self._renderer_placeholder.setParent(None)
+            self._renderer_placeholder = None
+
+        if self.pv_widget is not None:
+            self._dispose_renderer_widget(self.pv_widget)
+            self.pv_widget = None
+
+        self.pv_widget = QtInteractor(self.viewer_container)
+        self.pv_widget.set_background("#ffffff")
+        self.pv_widget.disable_shadows()
+        self.pv_widget.add_light(pv.Light(intensity=0.8, light_type='headlight'))
+        self.pv_widget.add_light(pv.Light(intensity=0.35, light_type='scenelight'))
+        self.viewer_container.layout().addWidget(self.pv_widget)
+        self.pv_widget.show_axes()
+        self._picker = pv._vtk.vtkCellPicker()
+        self._picker.SetTolerance(0.005)
+        self.pv_widget.setMouseTracking(True)
+        self.pv_widget.installEventFilter(self)
+
+        if self.seg_volume is not None and self.t1_volume is not None:
+            self.init_3d()
+        else:
+            self.pv_widget.render()
+
+    def _dispose_renderer_widget(self, widget):
+        """Dispose of a VTK/Qt render widget without leaving the OpenGL context in a bad state."""
+        if widget is None:
+            return
+
+        try:
+            widget.removeEventFilter(self)
+        except Exception:
+            pass
+
+        try:
+            widget.hide()
+        except Exception:
+            pass
+
+        try:
+            if hasattr(widget, "deep_clean"):
+                widget.deep_clean()
+        except Exception:
+            pass
+
+        try:
+            if hasattr(widget, "close"):
+                widget.close()
+        except Exception:
+            pass
+
+        try:
+            layout = self.viewer_container.layout() if hasattr(self, "viewer_container") else None
+            if layout is not None:
+                layout.removeWidget(widget)
+        except Exception:
+            pass
+
+        try:
+            widget.setParent(None)
+        except Exception:
+            pass
+
+        try:
+            widget.deleteLater()
+        except Exception:
+            pass
 
     def eventFilter(self, obj, event):
         if obj is getattr(self, "pv_widget", None) and getattr(self, "_picker", None):

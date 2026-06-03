@@ -445,6 +445,11 @@ class APIClient:
     def get_user_profile(self, email):
         """Get user profile information"""
         return self._make_request('GET', f'/api/auth/profile/{email}')
+
+    def update_user_profile(self, email, name):
+        """Update editable profile information"""
+        data = {'name': name}
+        return self._make_request('PUT', f'/api/auth/profile/{email}', json=data)
     
     def get_user_settings(self, email):
         """Get user settings"""
